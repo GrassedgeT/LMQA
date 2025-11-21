@@ -1,0 +1,61 @@
+# Monorepo root gitignore for React frontend + Flask backend (uv)
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors/IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Node/JS artifacts (front-end safety net; primary rules live in frontend/.gitignore)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.local
+frontend/coverage/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments (including uv-managed)
+.venv/
+venv/
+env/
+.python-version
+.roo
+
+# Flask-specific
+instance/
+*.db
+*.sqlite3
+*.sqlite
+
+# Env files
+.env
+.env.*
+*.env
+.flaskenv
+
+# Logs
+logs/
+*.log
+
+# Docker (optional; uncomment if你不希望提交覆盖文件)
+# docker-compose.override.yml
+
+# Mac/Linux system caches
+.Trash-*/
+.fseventsd
+.Spotlight-V100
+
+# uv cache (if present)
+.uv_cache/
