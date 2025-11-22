@@ -1,12 +1,42 @@
-import { useState, useEffect } from 'react';
-import { authAPI } from '../api';
+import { useState, useEffect, useCallback } from 'react';
+import { authAPI, modelConfigAPI } from '../api';
 import { handleError } from '../utils';
 import './ProfilePage.css';
+
+interface ModelConfig {
+  id: number;
+  provider: string;
+  model_name: string;
+  base_url: string;
+  is_default: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Provider {
+  name: string;
+  base_url: string;
+  models: string[];
+}
 
 export default function ProfilePage() {
   const [user, setUser] = useState<{ id: number; username: string; email: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'password'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'model'>('profile');
+  
+  // 模型配置相关状态
+  const [providers, setProviders] = useState<Record<string, Provider>>({});
+  const [modelConfigs, setModelConfigs] = useState<ModelConfig[]>([]);
+  const [editingConfig, setEditingConfig] = useState<ModelConfig | null>(null);
+  const [showConfigForm, setShowConfigForm] = useState(false);
+  const [configForm, setConfigForm] = useState({
+    provider: '',
+    model_name: '',
+    api_key: '',
+    base_url: '',
+    is_default: false,
+  });
+  const [testingConfigId, setTestingConfigId] = useState<number | null>(null);
   
   // 用户信息表单
   const [profileForm, setProfileForm] = useState({
@@ -24,6 +54,43 @@ export default function ProfilePage() {
   useEffect(() => {
     loadUser();
   }, []);
+
+  // 模型配置相关函数
+  const loadProviders = useCallback(async () => {
+    try {
+      const data = await modelConfigAPI.getProviders();
+      // API 返回的数据结构可能是 { providers: {...} } 或直接是 providers
+      setProviders(data?.providers || data || {});
+    } catch (err) {
+      console.error('加载模型提供商失败:', err);
+      handleError(err, '加载模型提供商失败');
+      // 即使失败也设置空对象，避免 UI 崩溃
+      setProviders({});
+    }
+  }, []);
+
+  const loadModelConfigs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await modelConfigAPI.getModelConfigs();
+      // API 返回的数据结构可能是 { configs: [...] } 或直接是 configs
+      setModelConfigs(data?.configs || data || []);
+    } catch (err) {
+      console.error('加载模型配置失败:', err);
+      handleError(err, '加载模型配置失败');
+      // 即使失败也设置空数组，避免 UI 崩溃
+      setModelConfigs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'model') {
+      loadProviders();
+      loadModelConfigs();
+    }
+  }, [activeTab, loadProviders, loadModelConfigs]);
 
   const loadUser = async () => {
     try {
@@ -94,8 +161,106 @@ export default function ProfilePage() {
     }
   };
 
+  const handleSaveConfig = async () => {
+    if (!configForm.provider || !configForm.model_name || !configForm.api_key) {
+      alert('请填写所有必填字段');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      if (editingConfig) {
+        await modelConfigAPI.updateModelConfig(editingConfig.id, {
+          api_key: configForm.api_key,
+          base_url: configForm.base_url || undefined,
+          is_default: configForm.is_default,
+        });
+        alert('模型配置更新成功');
+      } else {
+        await modelConfigAPI.createModelConfig({
+          provider: configForm.provider,
+          model_name: configForm.model_name,
+          api_key: configForm.api_key,
+          base_url: configForm.base_url || undefined,
+          is_default: configForm.is_default,
+        });
+        alert('模型配置创建成功');
+      }
+      setShowConfigForm(false);
+      loadModelConfigs();
+    } catch (err) {
+      handleError(err, editingConfig ? '更新模型配置失败' : '创建模型配置失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditConfig = (config: ModelConfig) => {
+    setEditingConfig(config);
+    setConfigForm({
+      provider: config.provider,
+      model_name: config.model_name,
+      api_key: '', // 不显示已保存的 API Key
+      base_url: config.base_url,
+      is_default: config.is_default === 1,
+    });
+    setShowConfigForm(true);
+  };
+
+  const handleDeleteConfig = async (configId: number) => {
+    if (!confirm('确定要删除这个模型配置吗？')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await modelConfigAPI.deleteModelConfig(configId);
+      alert('模型配置删除成功');
+      loadModelConfigs();
+    } catch (err) {
+      handleError(err, '删除模型配置失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSetDefault = async (configId: number) => {
+    try {
+      setLoading(true);
+      await modelConfigAPI.setDefaultModelConfig(configId);
+      alert('默认模型配置设置成功');
+      loadModelConfigs();
+    } catch (err) {
+      handleError(err, '设置默认模型配置失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestConfig = async (configId: number) => {
+    try {
+      setTestingConfigId(configId);
+      const result = await modelConfigAPI.testModelConfig(configId);
+      if (result.valid) {
+        alert('API Key 测试成功！');
+      } else {
+        alert(`API Key 测试失败: ${result.message}`);
+      }
+    } catch (err) {
+      handleError(err, '测试 API Key 失败');
+    } finally {
+      setTestingConfigId(null);
+    }
+  };
+
   if (loading && !user) {
-    return <div className="loading">加载中...</div>;
+    return (
+      <div className="profile-page">
+        <div className="loading" style={{ minHeight: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          加载中...
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -116,6 +281,12 @@ export default function ProfilePage() {
           onClick={() => setActiveTab('password')}
         >
           修改密码
+        </button>
+        <button
+          className={activeTab === 'model' ? 'active' : ''}
+          onClick={() => setActiveTab('model')}
+        >
+          模型配置
         </button>
       </div>
 
@@ -186,6 +357,190 @@ export default function ProfilePage() {
             >
               {loading ? '修改中...' : '修改密码'}
             </button>
+          </div>
+        )}
+
+        {activeTab === 'model' && (
+          <div className="model-config-content">
+            <div className="model-config-header">
+              <h2>大模型配置</h2>
+              <button
+                className="add-config-btn"
+                onClick={() => {
+                  setEditingConfig(null);
+                  setConfigForm({
+                    provider: '',
+                    model_name: '',
+                    api_key: '',
+                    base_url: '',
+                    is_default: false,
+                  });
+                  setShowConfigForm(true);
+                }}
+              >
+                + 添加模型配置
+              </button>
+            </div>
+
+            {showConfigForm && (
+              <div className="config-form-modal">
+                <div className="config-form-content">
+                  <div className="config-form-header">
+                    <h3>{editingConfig ? '编辑模型配置' : '添加模型配置'}</h3>
+                    <button className="close-btn" onClick={() => setShowConfigForm(false)}>×</button>
+                  </div>
+                  <div className="config-form-body">
+                    <div className="form-group">
+                      <label>模型提供商</label>
+                      <select
+                        value={configForm.provider}
+                        onChange={(e) => {
+                          const provider = e.target.value;
+                          setConfigForm({
+                            ...configForm,
+                            provider,
+                            model_name: '',
+                            base_url: providers[provider]?.base_url || '',
+                          });
+                        }}
+                        disabled={!!editingConfig}
+                      >
+                        <option value="">选择提供商</option>
+                        {Object.keys(providers).length > 0 ? (
+                          Object.entries(providers).map(([key, provider]) => (
+                            <option key={key} value={key}>{provider.name}</option>
+                          ))
+                        ) : (
+                          <option value="" disabled>加载中...</option>
+                        )}
+                      </select>
+                    </div>
+                    {configForm.provider && (
+                      <div className="form-group">
+                        <label>模型名称</label>
+                        <select
+                          value={configForm.model_name}
+                          onChange={(e) => setConfigForm({ ...configForm, model_name: e.target.value })}
+                          disabled={!!editingConfig}
+                        >
+                          <option value="">选择模型</option>
+                          {providers[configForm.provider]?.models.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="form-group">
+                      <label>API Key</label>
+                      <input
+                        type="password"
+                        value={configForm.api_key}
+                        onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })}
+                        placeholder="输入 API Key"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Base URL (可选)</label>
+                      <input
+                        type="text"
+                        value={configForm.base_url}
+                        onChange={(e) => setConfigForm({ ...configForm, base_url: e.target.value })}
+                        placeholder={configForm.provider ? providers[configForm.provider]?.base_url : 'Base URL'}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={configForm.is_default}
+                          onChange={(e) => setConfigForm({ ...configForm, is_default: e.target.checked })}
+                        />
+                        设为默认模型
+                      </label>
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        className="save-btn"
+                        onClick={handleSaveConfig}
+                        disabled={loading || !configForm.provider || !configForm.model_name || !configForm.api_key}
+                      >
+                        {loading ? '保存中...' : '保存'}
+                      </button>
+                      <button
+                        className="cancel-btn"
+                        onClick={() => setShowConfigForm(false)}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {loading ? (
+              <div className="loading" style={{ minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent' }}>
+                加载中...
+              </div>
+            ) : (
+              <div className="model-config-list">
+                {modelConfigs.length === 0 ? (
+                  <div className="empty-state">
+                    <p>暂无模型配置，请添加一个模型配置</p>
+                  </div>
+                ) : (
+                  modelConfigs.map((config) => {
+                    const isDefault = config.is_default === 1;
+                    return (
+                      <div key={config.id} className={`config-item ${isDefault ? 'default' : ''}`}>
+                        <div className="config-info">
+                          <div className="config-header">
+                            <h4>{providers[config.provider]?.name || config.provider} - {config.model_name}</h4>
+                            {isDefault && <span className="default-badge">默认</span>}
+                          </div>
+                          <div className="config-details">
+                            <p>Base URL: {config.base_url || '使用默认'}</p>
+                            <p>创建时间: {new Date(config.created_at).toLocaleString('zh-CN')}</p>
+                          </div>
+                        </div>
+                        <div className="config-actions">
+                          <button
+                            className="test-btn"
+                            onClick={() => handleTestConfig(config.id)}
+                            disabled={testingConfigId === config.id || loading}
+                          >
+                            {testingConfigId === config.id ? '测试中...' : '测试连接'}
+                          </button>
+                          {!isDefault && (
+                            <button
+                              className="set-default-btn"
+                              onClick={() => handleSetDefault(config.id)}
+                              disabled={loading}
+                            >
+                              设为默认
+                            </button>
+                          )}
+                          <button
+                            className="edit-btn"
+                            onClick={() => handleEditConfig(config)}
+                            disabled={loading}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className="delete-btn"
+                            onClick={() => handleDeleteConfig(config.id)}
+                            disabled={loading}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
