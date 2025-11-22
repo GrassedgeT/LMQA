@@ -11,6 +11,7 @@ interface Conversation {
   last_message_at: string;
   created_at: string;
   updated_at: string;
+  last_message_preview?: string;
 }
 
 interface Message {
@@ -627,48 +628,50 @@ export default function ChatPage() {
                   {inputValue.length} / {10000}
                 </span>
               </div>
-              <textarea
-                ref={(textarea) => {
-                  if (textarea) {
-                    textarea.style.height = 'auto';
-                    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-                  }
-                }}
-                value={inputValue}
-                onChange={(e) => {
-                  setInputValue(e.target.value);
-                  // 自动调整高度
-                  e.target.style.height = 'auto';
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder="输入消息... (Shift+Enter换行，Enter发送)"
-                rows={1}
-                style={{ resize: 'none', overflow: 'hidden' }}
-                autoFocus
-              />
-              <button 
-                onClick={sendMessage} 
-                disabled={sending || !inputValue.trim()}
-                className="send-button"
-              >
-                {sending ? (
-                  <>
-                    <span className="button-icon">⏳</span>
-                    <span>发送中...</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="button-icon">➤</span>
-                    <span>发送</span>
-                  </>
-                )}
-              </button>
+              <div className="input-row">
+                <textarea
+                  ref={(textarea) => {
+                    if (textarea) {
+                      textarea.style.height = 'auto';
+                      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+                    }
+                  }}
+                  value={inputValue}
+                  onChange={(e) => {
+                    setInputValue(e.target.value);
+                    // 自动调整高度
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder="输入消息... (Shift+Enter换行，Enter发送)"
+                  rows={1}
+                  style={{ resize: 'none', overflow: 'hidden' }}
+                  autoFocus
+                />
+                <button 
+                  onClick={sendMessage} 
+                  disabled={sending || !inputValue.trim()}
+                  className="send-button"
+                >
+                  {sending ? (
+                    <>
+                      <span className="button-icon">⏳</span>
+                      <span>发送中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="button-icon">➤</span>
+                      <span>发送</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </>
         ) : (

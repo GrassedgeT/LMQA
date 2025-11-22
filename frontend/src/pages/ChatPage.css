@@ -1,8 +1,10 @@
 .chat-page {
   display: flex;
   height: 100vh;
+  width: 100%;
   background: #ffffff;
   overflow: hidden;
+  min-width: 0;
 }
 
 .chat-main {
@@ -13,6 +15,7 @@
   background: #ffffff;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
 }
 
 /* 响应式设计 - 移动端 */
@@ -52,6 +55,15 @@
     padding: 12px;
   }
 
+  .input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-row button {
+    width: 100%;
+  }
+
   .input-options {
     font-size: 11px;
   }
@@ -75,17 +87,22 @@
 
 .conversation-sidebar {
   width: 300px;
+  min-width: 300px;
+  max-width: 300px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 0.3s ease;
+  transition: width 0.3s ease, min-width 0.3s ease, max-width 0.3s ease;
   position: relative;
+  flex-shrink: 0;
 }
 
 .conversation-sidebar.collapsed {
   width: 60px;
+  min-width: 60px;
+  max-width: 60px;
 }
 
 .sidebar-toggle {
@@ -630,19 +647,42 @@
 }
 
 .input-container {
-  padding: 20px 24px;
+  padding: 16px 24px 20px 24px;
   border-top: 1px solid #e2e8f0;
   background: #ffffff;
   display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: flex-end;
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
   width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
-.input-container textarea {
-  flex: 1;
+.input-options {
+  padding: 0;
+  font-size: 12px;
+  color: #64748b;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.input-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  width: 100%;
+  min-width: 0;
+}
+
+.input-row textarea {
+  flex: 1 1 0;
+  min-width: 0;
   padding: 14px 18px;
   background: #f8fafc;
   border: 1.5px solid #e2e8f0;
@@ -656,12 +696,11 @@
   transition: all 0.2s ease;
   line-height: 1.6;
   overflow-y: auto;
-  min-width: 0;
-  width: 100%;
   box-sizing: border-box;
+  width: 100%;
 }
 
-.input-container textarea:focus {
+.input-row textarea:focus {
   outline: none;
   border-color: #3b82f6;
   background: #ffffff;
@@ -669,11 +708,11 @@
   transform: translateY(-1px);
 }
 
-.input-container textarea::placeholder {
+.input-row textarea::placeholder {
   color: #94a3b8;
 }
 
-.input-container button {
+.input-row button {
   padding: 14px 28px;
   background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   color: white;
@@ -686,19 +725,23 @@
   white-space: nowrap;
   box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
   min-width: 80px;
+  flex-shrink: 0;
+  height: fit-content;
 }
 
-.input-container button:hover:not(:disabled) {
+/* .input-container button 样式已合并到 .input-row button */
+
+.input-row button:hover:not(:disabled) {
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
   transform: translateY(-1px);
 }
 
-.input-container button:active:not(:disabled) {
+.input-row button:active:not(:disabled) {
   transform: translateY(0);
 }
 
-.input-container button:disabled {
+.input-row button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
@@ -879,16 +922,7 @@
   margin-top: 4px;
 }
 
-.input-options {
-  padding: 8px 0;
-  font-size: 12px;
-  color: #64748b;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+/* .input-options 样式已在上面定义 */
 
 .input-options label {
   display: flex;
