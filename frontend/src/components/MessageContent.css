@@ -1,0 +1,114 @@
+.message-content-wrapper {
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+
+.message-content-wrapper h1,
+.message-content-wrapper h2,
+.message-content-wrapper h3,
+.message-content-wrapper h4,
+.message-content-wrapper h5,
+.message-content-wrapper h6 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.message-content-wrapper h1 {
+  font-size: 1.5em;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.3em;
+}
+
+.message-content-wrapper h2 {
+  font-size: 1.3em;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.3em;
+}
+
+.message-content-wrapper h3 {
+  font-size: 1.1em;
+}
+
+.message-content-wrapper p {
+  margin: 0.5em 0;
+}
+
+.message-content-wrapper ul,
+.message-content-wrapper ol {
+  margin: 0.5em 0;
+  padding-left: 2em;
+}
+
+.message-content-wrapper li {
+  margin: 0.25em 0;
+}
+
+.message-content-wrapper blockquote {
+  margin: 0.5em 0;
+  padding: 0 1em;
+  border-left: 4px solid #3b82f6;
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.message-content-wrapper table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+
+.message-content-wrapper table th,
+.message-content-wrapper table td {
+  border: 1px solid #e2e8f0;
+  padding: 0.5em;
+  text-align: left;
+}
+
+.message-content-wrapper table th {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.message-content-wrapper a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.message-content-wrapper a:hover {
+  text-decoration: underline;
+}
+
+.message-content-wrapper code {
+  background: #f1f5f9;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.message-content-wrapper pre {
+  margin: 1em 0;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.message-content-wrapper pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.message-content-wrapper hr {
+  margin: 1.5em 0;
+  border: none;
+  border-top: 1px solid #e2e8f0;
+}
+
+.message-content-wrapper img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+
