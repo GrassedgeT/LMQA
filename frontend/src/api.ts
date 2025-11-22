@@ -19,9 +19,9 @@ export const getAuthToken = () => authToken;
 // 统一请求函数
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string> || {}),
   };
 
   if (authToken) {
@@ -273,7 +273,7 @@ export const conversationAPI = {
 
         for (const line of lines) {
           if (line.startsWith('event: ')) {
-            const eventType = line.substring(7).trim();
+            // 事件类型，暂时不需要使用
             continue;
           }
           if (line.startsWith('data: ')) {
@@ -409,6 +409,91 @@ export const memoryAPI = {
     }>('/memories/search', {
       method: 'POST',
       body: JSON.stringify({ query, limit }),
+    });
+  },
+};
+
+// 模型配置API
+export const modelConfigAPI = {
+  getProviders: async () => {
+    return request<{
+      providers: Record<string, {
+        name: string;
+        base_url: string;
+        models: string[];
+      }>;
+    }>('/user/model-configs/providers');
+  },
+
+  getModelConfigs: async () => {
+    return request<{
+      configs: Array<{
+        id: number;
+        user_id: number;
+        provider: string;
+        model_name: string;
+        base_url: string;
+        is_default: number;
+        created_at: string;
+        updated_at: string;
+      }>;
+    }>('/user/model-configs');
+  },
+
+  getDefaultModelConfig: async () => {
+    return request<{
+      id: number;
+      user_id: number;
+      provider: string;
+      model_name: string;
+      base_url: string;
+      is_default: number;
+      created_at: string;
+      updated_at: string;
+    }>('/user/model-configs/default');
+  },
+
+  createModelConfig: async (config: {
+    provider: string;
+    model_name: string;
+    api_key: string;
+    base_url?: string;
+    is_default?: boolean;
+  }) => {
+    return request<{ id: number }>('/user/model-configs', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
+  updateModelConfig: async (configId: number, config: {
+    provider?: string;
+    model_name?: string;
+    api_key?: string;
+    base_url?: string;
+    is_default?: boolean;
+  }) => {
+    return request(`/user/model-configs/${configId}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  deleteModelConfig: async (configId: number) => {
+    return request(`/user/model-configs/${configId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  setDefaultModelConfig: async (configId: number) => {
+    return request(`/user/model-configs/${configId}/set-default`, {
+      method: 'PUT',
+    });
+  },
+
+  testModelConfig: async (configId: number) => {
+    return request<{ valid: boolean; message: string }>(`/user/model-configs/${configId}/test`, {
+      method: 'POST',
     });
   },
 };
