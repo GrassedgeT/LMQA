@@ -428,14 +428,15 @@ export default function ChatPage() {
           <>
             <div className="messages-container">
               {loading ? (
-                <div style={{ textAlign: 'center', color: '#94a3b8', marginTop: '100px' }}>
-                  <div style={{ fontSize: '24px', marginBottom: '12px' }}>⏳</div>
+                <div className="loading-messages">
+                  <div className="loading-spinner"></div>
                   <div>加载中...</div>
                 </div>
               ) : messages.length === 0 ? (
-                <div style={{ textAlign: 'center', color: '#94a3b8', marginTop: '100px', fontSize: '16px' }}>
-                  <div style={{ fontSize: '64px', marginBottom: '16px', opacity: 0.5 }}>💭</div>
-                  <div>开始新的对话吧！</div>
+                <div className="empty-messages">
+                  <div className="empty-icon">💭</div>
+                  <div className="empty-text">开始新的对话吧！</div>
+                  <div className="empty-hint">输入消息开始与AI助手对话</div>
                 </div>
               ) : (
                 messages.map((msg) => (
@@ -627,8 +628,19 @@ export default function ChatPage() {
                 </span>
               </div>
               <textarea
+                ref={(textarea) => {
+                  if (textarea) {
+                    textarea.style.height = 'auto';
+                    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+                  }
+                }}
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  // 自动调整高度
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
@@ -637,17 +649,22 @@ export default function ChatPage() {
                 }}
                 placeholder="输入消息... (Shift+Enter换行，Enter发送)"
                 rows={1}
-                style={{ resize: 'none' }}
+                style={{ resize: 'none', overflow: 'hidden' }}
+                autoFocus
               />
-              <button onClick={sendMessage} disabled={sending || !inputValue.trim()}>
+              <button 
+                onClick={sendMessage} 
+                disabled={sending || !inputValue.trim()}
+                className="send-button"
+              >
                 {sending ? (
                   <>
-                    <span style={{ display: 'inline-block', marginRight: '6px' }}>⏳</span>
+                    <span className="button-icon">⏳</span>
                     <span>发送中...</span>
                   </>
                 ) : (
                   <>
-                    <span style={{ display: 'inline-block', marginRight: '6px' }}>➤</span>
+                    <span className="button-icon">➤</span>
                     <span>发送</span>
                   </>
                 )}
@@ -656,8 +673,15 @@ export default function ChatPage() {
           </>
         ) : (
           <div className="empty-chat">
-            <p>选择一个对话或创建新对话开始聊天</p>
-            <button onClick={createNewConversation}>创建新对话</button>
+            <div className="logo-section">
+              <div className="logo">LMQA</div>
+              <div className="slogan">智能问答助手 · 让知识触手可及</div>
+              <div className="subtitle">开始新的对话，探索无限可能</div>
+            </div>
+            <button onClick={createNewConversation} className="start-chat-btn">
+              <span>+</span>
+              <span>创建新对话</span>
+            </button>
           </div>
         )}
       </div>
