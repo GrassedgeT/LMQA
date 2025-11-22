@@ -1,158 +1,26 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 16px;
+  color: #64748b;
+  background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 50%, #ffffff 100%);
+  gap: 12px;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
+.loading::before {
+  content: '';
+  width: 20px;
+  height: 20px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
+@keyframes spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
-}
-
-/* 待办事项样式 */
-.add-todo {
-  margin: 2rem 0;
-  display: flex;
-  justify-content: center;
-  gap: 1rem;
-}
-
-.add-todo input {
-  padding: 0.5rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 1rem;
-}
-
-.add-todo button {
-  padding: 0.5rem 1rem;
-  background-color: #1a1a1a;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 1rem;
-}
-
-.add-todo button:hover {
-  background-color: #3a3a3a;
-}
-
-.todo-list {
-  margin: 2rem 0;
-  text-align: left;
-}
-
-.todo-list h2 {
-  margin-bottom: 1rem;
-}
-
-.todo-list ul {
-  list-style: none;
-  padding: 0;
-}
-
-.todo-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  background-color: #f5f5f5;
-  border-radius: 4px;
-}
-
-.todo-list li.completed {
-  background-color: #e8f5e9;
-}
-
-.todo-list li.completed span {
-  text-decoration: line-through;
-  color: #888;
-}
-
-.todo-list li span {
-  flex-grow: 1;
-  cursor: pointer;
-  padding: 0.5rem;
-}
-
-.todo-list li button {
-  padding: 0.25rem 0.5rem;
-  background-color: #ff4d4d;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-
-.todo-list li button:hover {
-  background-color: #ff1a1a;
-}
-
-.error {
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 1rem;
-  border-radius: 4px;
-  margin: 1rem 0;
-}
-
-.error button {
-  margin-left: 1rem;
-  padding: 0.25rem 0.5rem;
-  background-color: #c62828;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.instructions {
-  margin-top: 2rem;
-  padding: 1rem;
-  background-color: #f0f0f0;
-  border-radius: 4px;
-  text-align: left;
-}
-
-.instructions h3 {
-  margin-top: 0;
-}
-
-.instructions ul {
-  padding-left: 1.5rem;
 }
