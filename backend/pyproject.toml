@@ -10,4 +10,6 @@ dependencies = [
     "pyjwt>=2.8.0",
     "werkzeug>=3.0.0",
     "requests>=2.31.0",
+    "cryptography>=41.0.0",
+    "openai>=1.0.0",
 ]
