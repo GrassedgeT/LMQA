@@ -6,7 +6,7 @@ import os
 import jwt
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional, Dict, List, Any
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -101,6 +101,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            conversation_id INTEGER,
             mem0_memory_id TEXT,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
@@ -110,7 +111,8 @@ def init_db():
             metadata TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         )
     ''')
     
@@ -131,10 +133,40 @@ def init_db():
         )
     ''')
     
+    # 数据库迁移：为memories表添加conversation_id字段
+    try:
+        # 检查memories表是否已有conversation_id字段
+        c.execute("PRAGMA table_info(memories)")
+        columns = c.fetchall()
+        column_names = [col[1] for col in columns]
+
+        if 'conversation_id' not in column_names:
+            logger.info('为memories表添加conversation_id字段')
+            c.execute('ALTER TABLE memories ADD COLUMN conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE')
+    except Exception as e:
+        logger.error(f'数据库迁移失败: {str(e)}')
+        # 不抛出异常，继续运行
+
     conn.commit()
     conn.close()
 
 # 数据库操作辅助函数
+def convert_timestamp_to_iso(timestamp_str: str) -> str:
+    """将 SQLite 时间戳转换为 ISO 8601 格式（UTC）"""
+    if not timestamp_str:
+        return timestamp_str
+    try:
+        # SQLite 的 CURRENT_TIMESTAMP 返回格式: 'YYYY-MM-DD HH:MM:SS' (UTC)
+        # 转换为 ISO 8601 格式并添加 UTC 时区标识
+        dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        # 假设数据库存储的是 UTC 时间，转换为 UTC 时区对象
+        dt_utc = dt.replace(tzinfo=timezone.utc)
+        # 返回 ISO 8601 格式字符串，带 'Z' 后缀表示 UTC
+        return dt_utc.isoformat().replace('+00:00', 'Z')
+    except (ValueError, AttributeError, TypeError):
+        # 如果解析失败，返回原值
+        return timestamp_str
+
 def execute_query(query: str, params: tuple = ()) -> List[sqlite3.Row]:
     """执行查询"""
     conn = sqlite3.connect(app.config['DATABASE'])
@@ -142,7 +174,32 @@ def execute_query(query: str, params: tuple = ()) -> List[sqlite3.Row]:
     try:
         c = conn.cursor()
         c.execute(query, params)
-        return c.fetchall()
+        results = c.fetchall()
+        # 转换所有时间戳字段为 ISO 8601 格式
+        converted_results = []
+        for row in results:
+            row_dict = dict(row)
+            # 转换所有可能的时间戳字段
+            timestamp_fields = ['created_at', 'updated_at', 'last_message_at', 'edited_at']
+            for field in timestamp_fields:
+                if field in row_dict and row_dict[field]:
+                    row_dict[field] = convert_timestamp_to_iso(row_dict[field])
+            # 创建一个类似 Row 的对象，保持原有接口
+            class RowLike:
+                def __init__(self, data):
+                    self._data = data
+                    for key, value in data.items():
+                        setattr(self, key, value)
+                def __getitem__(self, key):
+                    return self._data[key]
+                def __contains__(self, key):
+                    return key in self._data
+                def keys(self):
+                    return self._data.keys()
+                def get(self, key, default=None):
+                    return self._data.get(key, default)
+            converted_results.append(RowLike(row_dict))
+        return converted_results if converted_results else results
     except Exception as e:
         logger.error(f'数据库查询错误: {str(e)}, SQL: {query}, Params: {params}')
         raise
@@ -456,17 +513,23 @@ class AgentService:
         result = self._make_request('/memories/sync', {'user_id': user_id, 'memory': memory_data})
         return result is not None
     
-    def search_memories(self, user_id: int, query: str, limit: int = 10) -> List[Dict]:
-        """语义搜索记忆"""
+    def search_memories(self, user_id: int, query: str, limit: int = 10, conversation_id: Optional[int] = None) -> List[Dict]:
+        """语义搜索记忆（仅搜索指定对话的记忆）"""
+        if not conversation_id:
+            logger.warning('search_memories: conversation_id is required')
+            return []
+        
         if self.agent_service_url:
-            result = self._make_request('/memories/search', {'user_id': user_id, 'query': query, 'limit': limit})
+            request_data = {'user_id': user_id, 'query': query, 'limit': limit, 'conversation_id': conversation_id}
+            result = self._make_request('/memories/search', request_data)
             if result:
                 return result.get('memories', [])
         # 本地模式：简单的关键词搜索
         try:
+            # 只搜索指定对话的记忆
             results = execute_query(
-                '''SELECT * FROM memories WHERE user_id = ? AND (content LIKE ? OR title LIKE ?) LIMIT ?''',
-                (user_id, f'%{query}%', f'%{query}%', limit)
+                '''SELECT * FROM memories WHERE user_id = ? AND conversation_id = ? AND (content LIKE ? OR title LIKE ?) LIMIT ?''',
+                (user_id, conversation_id, f'%{query}%', f'%{query}%', limit)
             )
             return [dict(row) for row in results]
         except Exception as e:
@@ -1137,8 +1200,8 @@ def send_message(conversation_id):
     )
     history = [{'role': m['role'], 'content': m['content']} for m in history_messages]
     
-    # 获取相关记忆
-    memories = agent_service.search_memories(request.current_user_id, content, limit=5)
+    # 获取相关记忆（仅搜索当前对话的记忆）
+    memories = agent_service.search_memories(request.current_user_id, content, limit=5, conversation_id=conversation_id)
     
     # 调用智能体生成回答
     context = {
@@ -1212,7 +1275,7 @@ def send_message_stream(conversation_id):
                 (conversation_id,)
             )
             history = [{'role': m['role'], 'content': m['content']} for m in history_messages]
-            memories = agent_service.search_memories(request.current_user_id, content, limit=5)
+            memories = agent_service.search_memories(request.current_user_id, content, limit=5, conversation_id=conversation_id)
             
             context = {'history': history, 'memories': memories}
             
@@ -1375,27 +1438,42 @@ def delete_message(conversation_id, message_id):
 @app.route('/api/memories', methods=['GET'])
 @require_auth
 def get_memories():
-    """获取记忆列表"""
+    """获取记忆列表（必须指定对话ID）"""
     page, limit, offset = get_pagination_params(20, 100)
     category = request.args.get('category')
     search = request.args.get('search')
-    
-    conditions = ['user_id = ?']
-    params = [request.current_user_id]
+    conversation_id = request.args.get('conversation_id')
+
+    # conversation_id 现在是必需的
+    if not conversation_id:
+        return error_response('缺少必需参数：conversation_id', 'VALIDATION_ERROR', 400)
+
+    # 验证用户有权限访问该对话
+    try:
+        conversation_id_int = int(conversation_id)
+    except (ValueError, TypeError):
+        return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
+
+    if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
+        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+
+    conditions = ['user_id = ?', 'conversation_id = ?']
+    params = [request.current_user_id, conversation_id_int]
+
     if category:
         conditions.append('category = ?')
         params.append(category)
     if search:
         conditions.append('(content LIKE ? OR title LIKE ?)')
         params.extend([f'%{search}%', f'%{search}%'])
-    
+
     where_clause = ' AND '.join(conditions)
     memories = execute_query(
         f'SELECT * FROM memories WHERE {where_clause} ORDER BY updated_at DESC LIMIT ? OFFSET ?',
         tuple(params + [limit, offset])
     )
     total = execute_query(f'SELECT COUNT(*) as count FROM memories WHERE {where_clause}', tuple(params))[0]['count']
-    
+
     return success_response({
         'memories': [dict(m) for m in memories],
         'pagination': {
@@ -1409,26 +1487,51 @@ def get_memories():
 @app.route('/api/memories', methods=['POST'])
 @require_auth
 def create_memory():
-    """创建记忆"""
+    """创建记忆（必须指定对话ID）"""
     data = request.get_json()
     if not data or not data.get('title') or not data.get('content'):
         return error_response('缺少必需字段：title, content', 'VALIDATION_ERROR', 400)
-    
-    # 输入长度验证
+
+    # conversation_id 现在是必需的
+    conversation_id = data.get('conversation_id')
+    if not conversation_id:
+        return error_response('缺少必需字段：conversation_id', 'VALIDATION_ERROR', 400)
+
+    # 输入长度验证和格式化
     title = data['title'].strip()
     content = data['content'].strip()
+
+    # 验证标题和内容不为空
+    if not title:
+        return error_response('记忆标题不能为空', 'VALIDATION_ERROR', 400)
     
+    if not content:
+        return error_response('记忆内容不能为空', 'VALIDATION_ERROR', 400)
+
     if len(title) > MAX_MEMORY_TITLE_LENGTH:
         return error_response(f'记忆标题长度不能超过{MAX_MEMORY_TITLE_LENGTH}个字符', 'VALIDATION_ERROR', 400)
-    
+
     if len(content) > MAX_MEMORY_CONTENT_LENGTH:
         return error_response(f'记忆内容长度不能超过{MAX_MEMORY_CONTENT_LENGTH}个字符', 'VALIDATION_ERROR', 400)
-    
+
+    # 规范化内容：统一换行符
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+    # 验证对话ID
+    try:
+        conversation_id_int = int(conversation_id)
+    except (ValueError, TypeError):
+        return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
+
+    if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
+        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+
     memory_id = execute_update(
-        '''INSERT INTO memories (user_id, title, content, memory_type, category, tags, metadata)
-           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        '''INSERT INTO memories (user_id, conversation_id, title, content, memory_type, category, tags, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
         (
             request.current_user_id,
+            conversation_id_int,
             title,
             content,
             data.get('memory_type'),
@@ -1437,16 +1540,17 @@ def create_memory():
             json.dumps(data.get('metadata', {})) if data.get('metadata') else None
         )
     )
-    
+
     # 同步到智能体系统
     agent_service.sync_memory(request.current_user_id, {
         'id': memory_id,
+        'conversation_id': conversation_id_int,
         'title': title,
         'content': content,
         'category': data.get('category'),
         'tags': data.get('tags', [])
     })
-    
+
     memory = dict(execute_query('SELECT * FROM memories WHERE id = ?', (memory_id,))[0])
     return success_response(memory, '记忆创建成功')
 
@@ -1457,44 +1561,61 @@ def update_memory(memory_id):
     data = request.get_json()
     if not verify_resource_ownership('memories', memory_id, request.current_user_id):
         return error_response('记忆不存在或无权限', 'NOT_FOUND', 404)
-    
+
+    # 验证对话ID（如果要更改对话）
+    conversation_id = data.get('conversation_id')
+    if conversation_id:
+        if not verify_resource_ownership('conversations', int(conversation_id), request.current_user_id):
+            return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+
     update_fields = []
     params = []
-    
+
     # 允许更新的字段列表（防止SQL注入）
     allowed_fields = {
         'title': MAX_MEMORY_TITLE_LENGTH,
         'content': MAX_MEMORY_CONTENT_LENGTH,
         'category': 50,
         'tags': None,  # JSON格式，长度由内容决定
-        'memory_type': 50
+        'memory_type': 50,
+        'conversation_id': None  # 允许更改所属对话
     }
-    
+
     for field, max_length in allowed_fields.items():
         if field in data:
             value = data[field]
-            if field == 'title' or field == 'content':
+            if field == 'title':
                 value = value.strip()
+                if not value:
+                    return error_response('记忆标题不能为空', 'VALIDATION_ERROR', 400)
                 if max_length and len(value) > max_length:
-                    return error_response(f'{field}长度不能超过{max_length}个字符', 'VALIDATION_ERROR', 400)
+                    return error_response(f'记忆标题长度不能超过{max_length}个字符', 'VALIDATION_ERROR', 400)
+            elif field == 'content':
+                value = value.strip()
+                if not value:
+                    return error_response('记忆内容不能为空', 'VALIDATION_ERROR', 400)
+                if max_length and len(value) > max_length:
+                    return error_response(f'记忆内容长度不能超过{max_length}个字符', 'VALIDATION_ERROR', 400)
+                # 规范化内容：统一换行符
+                value = value.replace('\r\n', '\n').replace('\r', '\n')
             elif field == 'tags':
                 value = json.dumps(value) if isinstance(value, list) else value
             update_fields.append(f'{field} = ?')
             params.append(value)
-    
+
     if not update_fields:
         return error_response('没有要更新的字段', 'VALIDATION_ERROR', 400)
-    
+
     update_fields.append('updated_at = CURRENT_TIMESTAMP')
     params.append(memory_id)
     params.append(request.current_user_id)
-    
+
     # 使用安全的字段名列表构建SQL
     execute_update(
         f'UPDATE memories SET {", ".join(update_fields)} WHERE id = ? AND user_id = ?',
         tuple(params)
     )
-    
+
     memory = dict(execute_query('SELECT * FROM memories WHERE id = ?', (memory_id,))[0])
     return success_response(memory, '记忆更新成功')
 
@@ -1510,20 +1631,69 @@ def delete_memory(memory_id):
 @app.route('/api/memories/search', methods=['POST'])
 @require_auth
 def search_memories():
-    """语义搜索记忆"""
+    """语义搜索记忆（必须指定对话ID）"""
     data = request.get_json()
     if not data or not data.get('query'):
         return error_response('缺少必需字段：query', 'VALIDATION_ERROR', 400)
     
+    conversation_id = data.get('conversation_id')
+    if not conversation_id:
+        return error_response('缺少必需字段：conversation_id', 'VALIDATION_ERROR', 400)
+    
+    # 验证用户有权限访问该对话
+    try:
+        conversation_id_int = int(conversation_id)
+    except (ValueError, TypeError):
+        return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
+    
+    if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
+        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+    
     query = data['query']
     limit = data.get('limit', 10)
     
-    # 调用智能体服务进行语义搜索
-    results = agent_service.search_memories(request.current_user_id, query, limit)
+    # 调用智能体服务进行语义搜索（仅搜索指定对话的记忆）
+    results = agent_service.search_memories(request.current_user_id, query, limit, conversation_id_int)
     
     return success_response({'memories': results})
 
 # 初始化数据库
+# 全局错误处理 - 确保所有错误都返回JSON格式
+@app.errorhandler(404)
+def not_found(error):
+    return error_response('资源不存在', 'NOT_FOUND', 404)
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f'服务器内部错误: {str(error)}')
+    return error_response('服务器内部错误', 'INTERNAL_ERROR', 500)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """捕获所有未处理的异常，确保返回JSON格式"""
+    logger.error(f'未处理的异常: {str(e)}', exc_info=True)
+    return error_response('服务器错误，请稍后重试', 'INTERNAL_ERROR', 500)
+
+# 确保所有响应都是JSON格式
+@app.after_request
+def after_request(response):
+    """确保所有响应都包含正确的Content-Type"""
+    if response.content_type and 'application/json' not in response.content_type:
+        # 如果是错误响应且不是JSON，尝试转换为JSON
+        if response.status_code >= 400:
+            try:
+                data = response.get_data(as_text=True)
+                # 如果响应不是JSON，创建一个JSON错误响应
+                return jsonify({
+                    'success': False,
+                    'message': data or '请求失败',
+                    'error_code': 'ERROR',
+                    'timestamp': datetime.utcnow().isoformat() + 'Z'
+                }), response.status_code
+            except:
+                pass
+    return response
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, port=5000)

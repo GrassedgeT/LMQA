@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { authAPI, modelConfigAPI } from '../api';
-import { handleError } from '../utils';
+import { handleError, formatDateTime } from '../utils';
 import './ProfilePage.css';
 
 interface ModelConfig {
@@ -500,7 +500,7 @@ export default function ProfilePage() {
                           </div>
                           <div className="config-details">
                             <p>Base URL: {config.base_url || '使用默认'}</p>
-                            <p>创建时间: {new Date(config.created_at).toLocaleString('zh-CN')}</p>
+                            <p>创建时间: {formatDateTime(config.created_at)}</p>
                           </div>
                         </div>
                         <div className="config-actions">

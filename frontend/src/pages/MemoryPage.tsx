@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { memoryAPI } from '../api';
-import { handleError } from '../utils';
+import { handleError, debounce } from '../utils';
 import HighlightText from '../components/HighlightText';
 import './MemoryPage.css';
 
@@ -29,11 +29,27 @@ export default function MemoryPage() {
     tags: '',
   });
 
-  useEffect(() => {
-    loadMemories();
-  }, [search, category]);
+  // 使用防抖优化搜索
+  const debouncedLoadMemories = useCallback(
+    debounce(async (searchValue: string, categoryValue: string) => {
+      try {
+        setLoading(true);
+        const data = await memoryAPI.getMemories(1, 50, categoryValue || undefined, searchValue || undefined);
+        setMemories(data.memories);
+      } catch (err) {
+        handleError(err, '加载记忆失败');
+      } finally {
+        setLoading(false);
+      }
+    }, 300),
+    []
+  );
 
-  const loadMemories = async () => {
+  useEffect(() => {
+    debouncedLoadMemories(search, category);
+  }, [search, category, debouncedLoadMemories]);
+
+  const loadMemories = useCallback(async () => {
     try {
       setLoading(true);
       const data = await memoryAPI.getMemories(1, 50, category || undefined, search || undefined);
@@ -43,7 +59,7 @@ export default function MemoryPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [search, category]);
 
   const handleCreate = () => {
     setEditingMemory(null);

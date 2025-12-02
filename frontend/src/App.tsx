@@ -9,20 +9,59 @@ import './App.css';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    
     // 检查是否已登录
-    const token = getAuthToken();
-    if (token) {
-      authAPI.getCurrentUser()
-        .then(() => setIsAuthenticated(true))
-        .catch(() => setIsAuthenticated(false));
-    } else {
-      setIsAuthenticated(false);
-    }
+    const checkAuth = async () => {
+      try {
+        const token = getAuthToken();
+        if (token) {
+          await authAPI.getCurrentUser();
+          if (isMounted) {
+            setIsAuthenticated(true);
+          }
+        } else {
+          if (isMounted) {
+            setIsAuthenticated(false);
+          }
+        }
+      } catch (err) {
+        // 认证失败，清除token
+        if (isMounted) {
+          setIsAuthenticated(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+    
+    // 设置超时，避免无限加载
+    timeoutId = setTimeout(() => {
+      if (isMounted && isLoading) {
+        setIsLoading(false);
+        if (isAuthenticated === null) {
+          setIsAuthenticated(false);
+        }
+      }
+    }, 10000); // 10秒超时
+    
+    checkAuth();
+    
+    return () => {
+      isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, []);
 
-  if (isAuthenticated === null) {
+  if (isLoading || isAuthenticated === null) {
     return <div className="loading">加载中...</div>;
   }
 
