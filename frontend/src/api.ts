@@ -1,6 +1,8 @@
 // API服务层 - 统一封装所有API调用
 
 const API_BASE = '/api';
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 毫秒
 
 // 存储token
 let authToken: string | null = localStorage.getItem('token');
@@ -16,12 +18,23 @@ export const setAuthToken = (token: string | null) => {
 
 export const getAuthToken = () => authToken;
 
-// 统一请求函数
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+/**
+ * 延迟函数
+ */
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * 统一请求函数（带重试机制）
+ */
+async function request<T>(
+  endpoint: string, 
+  options: RequestInit = {}, 
+  retries: number = MAX_RETRIES
+): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string> || {}),
   };
 
   if (authToken) {
@@ -35,32 +48,83 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     });
 
     // 检查响应类型
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
+    const contentType = response.headers.get('content-type') || '';
+    let data: any;
+    
+    if (contentType.includes('application/json')) {
+      try {
+        data = await response.json();
+      } catch (e) {
+        // 即使content-type是JSON，解析失败也要处理
+        const text = await response.text();
+        if (response.status === 401) {
+          setAuthToken(null);
+          window.location.href = '/login';
+          throw new Error('认证失败，请重新登录');
+        }
+        throw new Error('服务器返回了无效的JSON格式');
+      }
+    } else {
+      // 非JSON响应，尝试读取文本
+      const text = await response.text();
       if (response.status === 401) {
         setAuthToken(null);
         window.location.href = '/login';
+        throw new Error('认证失败，请重新登录');
       }
-      throw new Error('服务器返回了非JSON格式的响应');
+      // 尝试解析为JSON（某些服务器可能设置了错误的content-type）
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`服务器返回了非JSON格式的响应: ${text.substring(0, 100)}`);
+      }
     }
-
-    const data = await response.json();
 
     if (!response.ok) {
       // Token过期，清除并跳转登录
       if (response.status === 401) {
         setAuthToken(null);
         window.location.href = '/login';
+        throw new Error('认证失败，请重新登录');
       }
-      throw new Error(data.message || '请求失败');
+      
+      // 对于服务器错误，如果是可重试的错误且还有重试次数，则重试
+      if (response.status >= 500 && retries > 0) {
+        await delay(RETRY_DELAY);
+        return request<T>(endpoint, options, retries - 1);
+      }
+      
+      throw new Error(data.message || data.error || `请求失败 (${response.status})`);
     }
 
     return data.data || data;
   } catch (error) {
+    // 网络错误处理，如果是网络错误且还有重试次数，则重试
+    if (
+      error instanceof TypeError && 
+      error.message.includes('fetch') && 
+      retries > 0
+    ) {
+      await delay(RETRY_DELAY);
+      return request<T>(endpoint, options, retries - 1);
+    }
+    
+    // 如果是认证错误，不重试
+    if (error instanceof Error && error.message.includes('认证失败')) {
+      throw error;
+    }
+    
+    // 其他错误，如果是网络错误且还有重试次数，则重试
+    if (retries > 0 && !(error instanceof Error && error.message.includes('认证失败'))) {
+      await delay(RETRY_DELAY);
+      return request<T>(endpoint, options, retries - 1);
+    }
+    
     // 网络错误处理
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new Error('网络连接失败，请检查网络设置');
     }
+    
     throw error;
   }
 }
@@ -116,6 +180,18 @@ export const authAPI = {
     });
     setAuthToken(data.access_token);
     return data;
+  },
+
+  logout: async () => {
+    try {
+      // 尝试调用后端logout API（如果存在）
+      await request('/auth/logout', {
+        method: 'POST',
+      });
+    } catch (err) {
+      // 如果后端没有logout API，忽略错误，继续清除本地token
+    }
+    // 注意：这里不在finally中清除token，因为MainLayout中的handleLogout会处理
   },
 };
 
@@ -273,7 +349,7 @@ export const conversationAPI = {
 
         for (const line of lines) {
           if (line.startsWith('event: ')) {
-            const eventType = line.substring(7).trim();
+            // 事件类型，暂时不需要使用
             continue;
           }
           if (line.startsWith('data: ')) {
@@ -324,10 +400,11 @@ export const conversationAPI = {
 
 // 记忆API
 export const memoryAPI = {
-  getMemories: async (page = 1, limit = 20, category?: string, search?: string) => {
+  getMemories: async (conversationId: number, page = 1, limit = 20, category?: string, search?: string) => {
     const params = new URLSearchParams({
       page: page.toString(),
       limit: limit.toString(),
+      conversation_id: conversationId.toString(),
     });
     if (category) params.append('category', category);
     if (search) params.append('search', search);
@@ -335,6 +412,7 @@ export const memoryAPI = {
     return request<{
       memories: Array<{
         id: number;
+        conversation_id?: number;
         title: string;
         content: string;
         category?: string;
@@ -355,12 +433,14 @@ export const memoryAPI = {
   createMemory: async (memory: {
     title: string;
     content: string;
+    conversation_id: number;
     category?: string;
     tags?: string[];
     memory_type?: string;
   }) => {
     return request<{
       id: number;
+      conversation_id?: number;
       title: string;
       content: string;
       category?: string;
@@ -378,9 +458,11 @@ export const memoryAPI = {
     category?: string;
     tags?: string[];
     memory_type?: string;
+    conversation_id?: number;
   }) => {
     return request<{
       id: number;
+      conversation_id?: number;
       title: string;
       content: string;
       category?: string;
@@ -398,7 +480,7 @@ export const memoryAPI = {
     });
   },
 
-  searchMemories: async (query: string, limit = 10) => {
+  searchMemories: async (conversationId: number, query: string, limit = 10) => {
     return request<{
       memories: Array<{
         id: number;
@@ -408,7 +490,92 @@ export const memoryAPI = {
       }>;
     }>('/memories/search', {
       method: 'POST',
-      body: JSON.stringify({ query, limit }),
+      body: JSON.stringify({ conversation_id: conversationId, query, limit }),
+    });
+  },
+};
+
+// 模型配置API
+export const modelConfigAPI = {
+  getProviders: async () => {
+    return request<{
+      providers: Record<string, {
+        name: string;
+        base_url: string;
+        models: string[];
+      }>;
+    }>('/user/model-configs/providers');
+  },
+
+  getModelConfigs: async () => {
+    return request<{
+      configs: Array<{
+        id: number;
+        user_id: number;
+        provider: string;
+        model_name: string;
+        base_url: string;
+        is_default: number;
+        created_at: string;
+        updated_at: string;
+      }>;
+    }>('/user/model-configs');
+  },
+
+  getDefaultModelConfig: async () => {
+    return request<{
+      id: number;
+      user_id: number;
+      provider: string;
+      model_name: string;
+      base_url: string;
+      is_default: number;
+      created_at: string;
+      updated_at: string;
+    }>('/user/model-configs/default');
+  },
+
+  createModelConfig: async (config: {
+    provider: string;
+    model_name: string;
+    api_key: string;
+    base_url?: string;
+    is_default?: boolean;
+  }) => {
+    return request<{ id: number }>('/user/model-configs', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
+  updateModelConfig: async (configId: number, config: {
+    provider?: string;
+    model_name?: string;
+    api_key?: string;
+    base_url?: string;
+    is_default?: boolean;
+  }) => {
+    return request(`/user/model-configs/${configId}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  deleteModelConfig: async (configId: number) => {
+    return request(`/user/model-configs/${configId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  setDefaultModelConfig: async (configId: number) => {
+    return request(`/user/model-configs/${configId}/set-default`, {
+      method: 'PUT',
+    });
+  },
+
+  testModelConfig: async (configId: number) => {
+    return request<{ valid: boolean; message: string }>(`/user/model-configs/${configId}/test`, {
+      method: 'POST',
     });
   },
 };

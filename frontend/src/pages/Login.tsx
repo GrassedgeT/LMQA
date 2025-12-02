@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, FormEvent, ChangeEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { authAPI } from '../api';
 import './Auth.css';
@@ -7,6 +7,9 @@ interface LoginProps {
   onLogin: () => void;
 }
 
+/**
+ * 登录页面组件
+ */
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -14,20 +17,36 @@ export default function Login({ onLogin }: LoginProps) {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
+    
+    if (!username.trim() || !password.trim()) {
+      setError('请输入用户名和密码');
+      return;
+    }
+    
     setLoading(true);
 
     try {
-      await authAPI.login(username, password);
+      await authAPI.login(username.trim(), password);
       onLogin();
-      navigate('/');
+      navigate('/', { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败');
+      setError(err instanceof Error ? err.message : '登录失败，请检查用户名和密码');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleUsernameChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setUsername(e.target.value);
+    if (error) setError(''); // 清除错误信息
+  };
+
+  const handlePasswordChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setPassword(e.target.value);
+    if (error) setError(''); // 清除错误信息
   };
 
   return (
@@ -41,9 +60,11 @@ export default function Login({ onLogin }: LoginProps) {
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={handleUsernameChange}
               required
               placeholder="输入用户名或邮箱"
+              autoComplete="username"
+              disabled={loading}
             />
           </div>
           <div className="form-group">
@@ -51,9 +72,11 @@ export default function Login({ onLogin }: LoginProps) {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={handlePasswordChange}
               required
               placeholder="输入密码"
+              autoComplete="current-password"
+              disabled={loading}
             />
           </div>
           <button type="submit" disabled={loading} className="submit-btn">
