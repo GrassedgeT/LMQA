@@ -59,3 +59,6 @@ logs/
 
 # uv cache (if present)
 .uv_cache/
+
+backend/neo4j
+backend/qdrant_storage
