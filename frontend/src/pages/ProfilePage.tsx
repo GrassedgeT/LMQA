@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { authAPI, modelConfigAPI } from '../api';
 import { handleError, formatDateTime } from '../utils';
+import MemoryPage from './MemoryPage';
 import './ProfilePage.css';
 
 interface ModelConfig {
@@ -22,7 +23,7 @@ interface Provider {
 export default function ProfilePage() {
   const [user, setUser] = useState<{ id: number; username: string; email: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'model'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'model' | 'memory'>('profile');
   
   // 模型配置相关状态
   const [providers, setProviders] = useState<Record<string, Provider>>({});
@@ -288,6 +289,12 @@ export default function ProfilePage() {
         >
           模型配置
         </button>
+        <button
+          className={activeTab === 'memory' ? 'active' : ''}
+          onClick={() => setActiveTab('memory')}
+        >
+          记忆管理
+        </button>
       </div>
 
       <div className="profile-content">
@@ -541,6 +548,12 @@ export default function ProfilePage() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'memory' && (
+          <div className="memory-tab-content">
+            <MemoryPage />
           </div>
         )}
       </div>

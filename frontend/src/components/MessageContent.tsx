@@ -47,7 +47,7 @@ export default function MessageContent({ content }: MessageContentProps) {
     <div className="message-content-wrapper">
       <ReactMarkdown
         components={{
-          code({ inline, className, children, ...props }) {
+          code({ inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
             const codeString = String(children).replace(/\n$/, '');
@@ -67,7 +67,7 @@ export default function MessageContent({ content }: MessageContentProps) {
                   </button>
                 </div>
                 <SyntaxHighlighter
-                  style={oneLight}
+                  style={oneLight as any}
                   language={language}
                   PreTag="div"
                   customStyle={{
