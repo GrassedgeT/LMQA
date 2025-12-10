@@ -62,7 +62,7 @@ async function request<T>(
           window.location.href = '/login';
           throw new Error('认证失败，请重新登录');
         }
-        throw new Error('服务器返回了无效的JSON格式');
+        throw new Error(`服务器返回了无效的JSON格式: ${text.substring(0, 100)}`);
       }
     } else {
       // 非JSON响应，尝试读取文本
@@ -400,18 +400,30 @@ export const conversationAPI = {
 
 // 记忆API
 export const memoryAPI = {
-  getMemories: async (conversationId: number, page = 1, limit = 20, category?: string, search?: string) => {
+  getMemories: async (conversationId: number | null, page = 1, limit = 20, category?: string, search?: string) => {
     const params = new URLSearchParams({
       page: page.toString(),
       limit: limit.toString(),
-      conversation_id: conversationId.toString(),
     });
+    // 如果 provided conversationId (even if 0, if backend interprets 0 as specific. 
+    // But usually 0 or null means global if we design it that way. 
+    // Backend expects conversation_id param for "User Level" to be possibly absent or handled?
+    // Backend logic: if conversation_id param is present and 0, it means global. If absent, it returns ALL?
+    // Let's stick to: conversation_id=0 for global. conversation_id=123 for specific.
+    // If conversationId is null, we might not send it (returns all) or send 0 (returns global).
+    // Let's decide: null -> returns ALL? 0 -> returns Global?
+    // My backend change: `if conversation_id: if == 0: global else specific`. 
+    // So if I send 0, it gets global. 
+    if (conversationId !== null && conversationId !== undefined) {
+      params.append('conversation_id', conversationId.toString());
+    }
+
     if (category) params.append('category', category);
     if (search) params.append('search', search);
 
     return request<{
       memories: Array<{
-        id: number;
+        id: number | string;
         conversation_id?: number;
         title: string;
         content: string;
@@ -420,6 +432,11 @@ export const memoryAPI = {
         memory_type?: string;
         created_at: string;
         updated_at: string;
+      }>;
+      relations?: Array<{
+        source: string;
+        target: string;
+        relationship: string;
       }>;
       pagination: {
         page: number;
@@ -433,13 +450,13 @@ export const memoryAPI = {
   createMemory: async (memory: {
     title: string;
     content: string;
-    conversation_id: number;
+    conversation_id?: number | null;
     category?: string;
     tags?: string[];
     memory_type?: string;
   }) => {
     return request<{
-      id: number;
+      id: number | string;
       conversation_id?: number;
       title: string;
       content: string;
@@ -452,16 +469,16 @@ export const memoryAPI = {
     });
   },
 
-  updateMemory: async (memoryId: number, memory: {
+  updateMemory: async (memoryId: number | string, memory: {
     title?: string;
     content?: string;
     category?: string;
     tags?: string[];
     memory_type?: string;
-    conversation_id?: number;
+    conversation_id?: number | null;
   }) => {
     return request<{
-      id: number;
+      id: number | string;
       conversation_id?: number;
       title: string;
       content: string;
@@ -474,23 +491,27 @@ export const memoryAPI = {
     });
   },
 
-  deleteMemory: async (memoryId: number) => {
+  deleteMemory: async (memoryId: number | string) => {
     return request(`/memories/${memoryId}`, {
       method: 'DELETE',
     });
   },
 
-  searchMemories: async (conversationId: number, query: string, limit = 10) => {
+  searchMemories: async (conversationId: number | null, query: string, limit = 10) => {
+    const body: any = { query, limit };
+    if (conversationId !== null) {
+      body.conversation_id = conversationId;
+    }
     return request<{
       memories: Array<{
-        id: number;
+        id: number | string;
         title: string;
         content: string;
         category?: string;
       }>;
     }>('/memories/search', {
       method: 'POST',
-      body: JSON.stringify({ conversation_id: conversationId, query, limit }),
+      body: JSON.stringify(body),
     });
   },
 };

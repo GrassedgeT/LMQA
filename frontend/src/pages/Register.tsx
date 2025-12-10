@@ -1,4 +1,4 @@
-import { useState, FormEvent, ChangeEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { authAPI } from '../api';
 import './Auth.css';

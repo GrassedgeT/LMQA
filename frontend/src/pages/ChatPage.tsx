@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { conversationAPI, memoryAPI } from '../api';
+import { conversationAPI } from '../api';
 import { handleError } from '../utils';
 import MessageContent from '../components/MessageContent';
 import './ChatPage.css';
@@ -11,18 +11,6 @@ interface Message {
   created_at: string;
   is_edited?: boolean;
   edited_at?: string;
-}
-
-interface Memory {
-  id: number;
-  conversation_id?: number;
-  title: string;
-  content: string;
-  category?: string;
-  tags?: string;
-  memory_type?: string;
-  created_at: string;
-  updated_at: string;
 }
 
 interface ChatPageProps {
@@ -43,12 +31,6 @@ export default function ChatPage({
   const [useStream, setUseStream] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [streamAbortController, setStreamAbortController] = useState<AbortController | null>(null);
-  const [conversationMemories, setConversationMemories] = useState<Memory[]>([]);
-  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
-  const [editingMemoryId, setEditingMemoryId] = useState<number | null>(null);
-  const [showAddMemoryForm, setShowAddMemoryForm] = useState(false);
-  const [newMemoryTitle, setNewMemoryTitle] = useState('');
-  const [newMemoryContent, setNewMemoryContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
@@ -57,17 +39,13 @@ export default function ChatPage({
     if (currentConversationId) {
       // 清理编辑状态
       setEditingMessageId(null);
-      setEditingMemoryId(null);
-      // 加载消息和记忆
+      // 加载消息
       loadMessages(currentConversationId);
-      loadConversationMemories(currentConversationId);
     } else {
       setMessages([]);
-      setConversationMemories([]);
       setEditingMessageId(null);
-      setEditingMemoryId(null);
     }
-    // 注意：这里不包含loadMessages和loadConversationMemories作为依赖
+    // 注意：这里不包含loadMessages作为依赖
     // 因为我们只想在currentConversationId变化时触发，而不是在这些函数变化时触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentConversationId]);
@@ -101,15 +79,6 @@ export default function ChatPage({
       setMessages([]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadConversationMemories = async (conversationId: number) => {
-    try {
-      const data = await memoryAPI.getMemories(conversationId, 1, 50);
-      setConversationMemories(data.memories);
-    } catch (err) {
-      handleError(err, '加载对话记忆失败');
     }
   };
 
@@ -242,7 +211,7 @@ export default function ChatPage({
         // 这样可以避免覆盖刚刚显示的消息
       }
     } catch (err) {
-      setMessages((prev) => prev.filter((m) => m.id === tempUserMessage.id));
+      setMessages((prev) => prev.filter((m) => m.id !== tempUserMessage.id));
       handleError(err, '发送消息失败');
     } finally {
       setSending(false);
@@ -269,128 +238,17 @@ export default function ChatPage({
     }
   };
 
-
-  const handleCreateMemory = async (title: string, content: string) => {
-    if (!currentConversationId || !title.trim() || !content.trim()) {
-      alert('标题和内容不能为空');
-      return;
-    }
-
-    // 验证长度
-    if (title.trim().length > 200) {
-      alert('标题长度不能超过200个字符');
-      return;
-    }
-
-    if (content.trim().length > 10000) {
-      alert('内容长度不能超过10000个字符');
-      return;
-    }
-
-    try {
-      // 格式化内容：去除首尾空白，规范化换行
-      const formattedContent = content
-        .trim()
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n');
-
-      await memoryAPI.createMemory({
-        title: title.trim(),
-        content: formattedContent,
-        category: 'conversation',
-        tags: [],
-        conversation_id: currentConversationId
-      });
-      await loadConversationMemories(currentConversationId);
-      setNewMemoryTitle('');
-      setNewMemoryContent('');
-      setShowAddMemoryForm(false);
-      alert('记忆创建成功！');
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '创建记忆失败';
-      if (errorMessage.includes('非JSON格式')) {
-        alert('服务器响应格式错误，请稍后重试或联系管理员');
-      } else {
-        handleError(err, '创建记忆失败');
-      }
-    }
-  };
-
-  const handleUpdateMemory = async (memoryId: number, title: string, content: string) => {
-    if (!title.trim() || !content.trim()) {
-      alert('标题和内容不能为空');
-      return;
-    }
-
-    // 验证长度
-    if (title.trim().length > 200) {
-      alert('标题长度不能超过200个字符');
-      return;
-    }
-
-    if (content.trim().length > 10000) {
-      alert('内容长度不能超过10000个字符');
-      return;
-    }
-
-    try {
-      // 格式化内容：去除首尾空白，规范化换行
-      const formattedContent = content
-        .trim()
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n');
-
-      await memoryAPI.updateMemory(memoryId, {
-        title: title.trim(),
-        content: formattedContent
-      });
-      if (currentConversationId) {
-        await loadConversationMemories(currentConversationId);
-      }
-      setEditingMemoryId(null);
-      alert('记忆更新成功！');
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '更新记忆失败';
-      if (errorMessage.includes('非JSON格式')) {
-        alert('服务器响应格式错误，请稍后重试或联系管理员');
-      } else {
-        handleError(err, '更新记忆失败');
-      }
-    }
-  };
-
-  const handleDeleteMemory = async (memoryId: number) => {
-    if (!confirm('确定要删除这条记忆吗？')) return;
-    try {
-      await memoryAPI.deleteMemory(memoryId);
-      if (currentConversationId) {
-        await loadConversationMemories(currentConversationId);
-      }
-      alert('记忆删除成功！');
-    } catch (err) {
-      handleError(err, '删除记忆失败');
-    }
-  };
-
   return (
     <div className="chat-page">
       <div className="chat-main">
         {currentConversationId ? (
           <>
             <div className="chat-header">
-              <div className="chat-header-actions">
-                <button
-                  className={`memory-panel-toggle ${showMemoryPanel ? 'active' : ''}`}
-                  onClick={() => setShowMemoryPanel(!showMemoryPanel)}
-                  title={showMemoryPanel ? '隐藏记忆面板' : '显示记忆面板'}
-                >
-                  🧠 {showMemoryPanel ? '隐藏记忆' : '显示记忆'} ({conversationMemories.length})
-                </button>
-              </div>
+              {/* Header content if needed */}
             </div>
             <div className="chat-content">
               <div className="chat-content-main">
-                <div className={`messages-container ${showMemoryPanel ? 'with-memory-panel' : ''}`}>
+                <div className="messages-container">
                   {loading ? (
                     <div className="loading-messages">
                       <div className="loading-spinner"></div>
@@ -575,65 +433,6 @@ export default function ChatPage({
                               >
                                 🔄
                               </button>
-                              {msg.content && (
-                                <button
-                                  onClick={async () => {
-                                    if (!currentConversationId) {
-                                      alert('请先选择一个对话');
-                                      return;
-                                    }
-
-                                    // 自动生成标题：取内容前50个字符，去除换行和多余空格
-                                    const autoTitle = msg.content
-                                      .replace(/\n/g, ' ')
-                                      .replace(/\s+/g, ' ')
-                                      .trim()
-                                      .substring(0, 50);
-                                    
-                                    const title = prompt('请输入记忆标题:', autoTitle || '新记忆');
-                                    if (!title || !title.trim()) return;
-
-                                    try {
-                                      // 格式化内容：确保内容规范
-                                      const formattedContent = msg.content.trim();
-                                      
-                                      // 验证内容长度
-                                      if (formattedContent.length === 0) {
-                                        alert('内容不能为空');
-                                        return;
-                                      }
-
-                                      if (formattedContent.length > 10000) {
-                                        alert('内容过长，请选择较短的内容保存');
-                                        return;
-                                      }
-
-                                      await memoryAPI.createMemory({
-                                        title: title.trim(),
-                                        content: formattedContent,
-                                        category: 'conversation',
-                                        tags: [],
-                                        conversation_id: currentConversationId
-                                      });
-                                      // 刷新记忆列表
-                                      if (currentConversationId) {
-                                        await loadConversationMemories(currentConversationId);
-                                      }
-                                      alert('记忆创建成功！');
-                                    } catch (err) {
-                                      const errorMessage = err instanceof Error ? err.message : '创建记忆失败';
-                                      if (errorMessage.includes('非JSON格式')) {
-                                        alert('服务器响应格式错误，请稍后重试或联系管理员');
-                                      } else {
-                                        handleError(err, '创建记忆失败');
-                                      }
-                                    }
-                                  }}
-                                  title="保存为记忆"
-                                >
-                                  💾
-                                </button>
-                              )}
                             </>
                           )}
                         </div>
@@ -644,183 +443,6 @@ export default function ChatPage({
                 )}
                 <div ref={messagesEndRef} />
               </div>
-              {showMemoryPanel && (
-                <div className="memory-panel">
-                  <div className="memory-panel-header">
-                    <h3>对话记忆 ({conversationMemories.length})</h3>
-                    <div className="memory-panel-header-actions">
-                      <button
-                        className="memory-add-btn"
-                        onClick={() => {
-                          setShowAddMemoryForm(!showAddMemoryForm);
-                          if (showAddMemoryForm) {
-                            setNewMemoryTitle('');
-                            setNewMemoryContent('');
-                          }
-                        }}
-                        title="添加记忆"
-                      >
-                        {showAddMemoryForm ? '取消' : '+'}
-                      </button>
-                      <button
-                        className="memory-panel-close"
-                        onClick={() => setShowMemoryPanel(false)}
-                        title="关闭记忆面板"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                  <div className="memory-list">
-                    {showAddMemoryForm && (
-                      <div className="memory-item memory-add-form">
-                        <div className="memory-edit">
-                          <input
-                            type="text"
-                            value={newMemoryTitle}
-                            onChange={(e) => setNewMemoryTitle(e.target.value)}
-                            placeholder="记忆标题"
-                            className="memory-edit-title"
-                          />
-                          <textarea
-                            value={newMemoryContent}
-                            onChange={(e) => setNewMemoryContent(e.target.value)}
-                            placeholder="记忆内容"
-                            className="memory-edit-content"
-                            rows={4}
-                          />
-                          <div className="memory-edit-actions">
-                            <button
-                              onClick={() => {
-                                if (newMemoryTitle.trim() && newMemoryContent.trim()) {
-                                  handleCreateMemory(newMemoryTitle, newMemoryContent);
-                                } else {
-                                  alert('请填写标题和内容');
-                                }
-                              }}
-                              className="memory-save-btn"
-                            >
-                              保存
-                            </button>
-                            <button
-                              onClick={() => {
-                                setShowAddMemoryForm(false);
-                                setNewMemoryTitle('');
-                                setNewMemoryContent('');
-                              }}
-                              className="memory-cancel-btn"
-                            >
-                              取消
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {conversationMemories.length === 0 && !showAddMemoryForm ? (
-                    <div className="empty-memories">
-                      <div className="empty-icon">🧠</div>
-                      <div className="empty-text">暂无记忆</div>
-                      <div className="empty-hint">在对话中保存重要信息为记忆</div>
-                    </div>
-                  ) : (
-                    conversationMemories.map((memory) => (
-                      <div key={memory.id} className="memory-item">
-                        {editingMemoryId === memory.id ? (
-                          <div className="memory-edit">
-                            <input
-                              type="text"
-                              defaultValue={memory.title}
-                              placeholder="记忆标题"
-                              className="memory-edit-title"
-                            />
-                            <textarea
-                              defaultValue={memory.content}
-                              placeholder="记忆内容"
-                              className="memory-edit-content"
-                              rows={4}
-                            />
-                            <div className="memory-edit-actions">
-                              <button
-                                onClick={(e) => {
-                                  const memoryItem = e.currentTarget.closest('.memory-item');
-                                  if (memoryItem) {
-                                    const titleInput = memoryItem.querySelector('.memory-edit-title') as HTMLInputElement;
-                                    const contentTextarea = memoryItem.querySelector('.memory-edit-content') as HTMLTextAreaElement;
-                                    if (titleInput && contentTextarea) {
-                                      handleUpdateMemory(memory.id, titleInput.value, contentTextarea.value);
-                                    }
-                                  }
-                                }}
-                                className="memory-save-btn"
-                              >
-                                保存
-                              </button>
-                              <button
-                                onClick={() => setEditingMemoryId(null)}
-                                className="memory-cancel-btn"
-                              >
-                                取消
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="memory-header">
-                              <div className="memory-title">{memory.title}</div>
-                              <div className="memory-actions">
-                                <button
-                                  onClick={() => setEditingMemoryId(memory.id)}
-                                  title="编辑记忆"
-                                  className="memory-edit-btn"
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteMemory(memory.id)}
-                                  title="删除记忆"
-                                  className="memory-delete-btn"
-                                >
-                                  🗑️
-                                </button>
-                              </div>
-                            </div>
-                            <div className="memory-content">{memory.content}</div>
-                            <div className="memory-meta">
-                              <span className="memory-date">
-                                {(() => {
-                                  try {
-                                    const date = new Date(memory.created_at);
-                                    // 如果日期无效，返回原字符串
-                                    if (isNaN(date.getTime())) {
-                                      return memory.created_at;
-                                    }
-                                    return date.toLocaleString('zh-CN', {
-                                      year: 'numeric',
-                                      month: '2-digit',
-                                      day: '2-digit',
-                                      hour: '2-digit',
-                                      minute: '2-digit',
-                                      second: '2-digit',
-                                      hour12: false,
-                                      timeZone: 'Asia/Shanghai'
-                                    });
-                                  } catch (e) {
-                                    return memory.created_at;
-                                  }
-                                })()}
-                              </span>
-                              {memory.category && (
-                                <span className="memory-category">{memory.category}</span>
-                              )}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ))
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             <div className="input-container">
               <div className="input-options">
@@ -921,4 +543,3 @@ export default function ChatPage({
     </div>
   );
 }
-
