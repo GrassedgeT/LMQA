@@ -13,13 +13,14 @@ class MemoryManager:
         return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        
-        config = get_mem0_config()
-        self.memory = Memory.from_config(config)
-        self._initialized = True
-
+        # 移除 __init__ 中的 self.memory 初始化
+        # 保持单例结构仅用于管理类本身，但不持有有状态的 memory 实例
+        pass
+    def _get_client(self, llm_settings: Optional[Dict] = None):
+        """Helper to get a fresh Memory client with specific LLM config"""
+        config = get_mem0_config(llm_settings)
+        return Memory.from_config(config)
+    
     def add_memory(self, content: str | List[Dict[str, str]], user_id: str, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Adds a memory or a list of messages to the memory store.
@@ -39,7 +40,9 @@ class MemoryManager:
         if metadata:
             params["metadata"] = metadata
 
-        return self.memory.add(content, **params)
+        # 动态创建 client
+        client = self._get_client(llm_settings)
+        return client.add(content, **params)
 
     def get_memories(self, user_id: str, run_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """
@@ -60,7 +63,9 @@ class MemoryManager:
         # but generally supports filtering by user_id/run_id.
         # Current mem0 docs suggest using get_all(user_id=..., run_id=...)
         
-        return self.memory.get_all(limit=limit, **params)
+        # 获取列表通常不需要 LLM，但为了统一，我们使用默认配置即可
+        client = self._get_client(None)
+        return client.get_all(limit=limit, **params)
 
     def search_memories(self, query: str, user_id: str, run_id: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         """
@@ -79,7 +84,8 @@ class MemoryManager:
         if run_id:
             params["run_id"] = run_id
             
-        return self.memory.search(query, **params)
+        client = self._get_client(llm_settings)
+        return client.search(query, **params)
 
     def update_memory(self, memory_id: str, new_data: str) -> Dict[str, Any]:
         """
@@ -92,7 +98,8 @@ class MemoryManager:
         Returns:
             The result of the update operation.
         """
-        return self.memory.update(memory_id, new_data)
+        client = self._get_client(llm_settings)
+        return client.update(memory_id, new_data)
 
     def delete_memory(self, memory_id: str) -> Dict[str, Any]:
         """
@@ -104,7 +111,8 @@ class MemoryManager:
         Returns:
             The result of the delete operation.
         """
-        return self.memory.delete(memory_id)
+        client = self._get_client(None)
+        return client.delete(memory_id)
 
     def delete_all_memories(self, user_id: str, run_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -121,7 +129,8 @@ class MemoryManager:
         if run_id:
             params["run_id"] = run_id
             
-        return self.memory.delete_all(**params)
+        client = self._get_client(None)
+        return client.delete_all(**params)
 
     def get_graph(self, user_id: str, run_id: Optional[str] = None):
         """

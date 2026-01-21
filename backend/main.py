@@ -525,6 +525,7 @@ class AgentService:
                 # Determine run_id based on conversation_id presence
                 # Note: memory_data comes from create_memory route
                 # If conversation_id is 0 or None, treat as user-level (run_id=None)
+                llm_settings = self._get_user_model_config(user_id)
                 conversation_id = memory_data.get('conversation_id')
                 run_id = str(conversation_id) if conversation_id else None
                 
@@ -539,7 +540,8 @@ class AgentService:
                     content=content,
                     user_id=str(user_id),
                     run_id=run_id,
-                    metadata=metadata
+                    metadata=metadata,
+                    llm_settings=llm_settings
                 )
                 logger.info(f"Memory synced to MemoryManager: {result}")
                 return result
@@ -579,6 +581,7 @@ class AgentService:
         
         if self.memory_manager:
             try:
+                llm_settings = self._get_user_model_config(user_id)
                 # Format as chat history list for mem0
                 messages = [
                     {"role": "user", "content": user_message},
@@ -587,7 +590,8 @@ class AgentService:
                 self.memory_manager.add_memory(
                     content=messages,
                     user_id=str(user_id),
-                    run_id=str(conversation_id)
+                    run_id=str(conversation_id),
+                    llm_settings=llm_settings
                 )
                 logger.info(f"Interaction added to memory for conv {conversation_id}")
             except Exception as e:
@@ -613,12 +617,19 @@ class AgentService:
         # 本地模式
         if self.memory_manager:
             try:
+                llm_settings = self._get_user_model_config(user_id)
                 all_results = []
                 seen_ids = set()
                 
                 # 1. Search conversation memories (Priority 1)
                 if conversation_id:
-                     conv_results = self.memory_manager.search_memories(query, user_id=str(user_id), run_id=str(conversation_id), limit=limit)
+                     conv_results = self.memory_manager.search_memories(
+                         query, 
+                         user_id=str(user_id), 
+                         run_id=str(conversation_id), 
+                         limit=limit,
+                         llm_settings=llm_settings # <--- 新增参数
+                     )
                      c_mems = conv_results.get('results', []) if isinstance(conv_results, dict) else conv_results
                      for m in c_mems:
                          if m.get('id') not in seen_ids:
@@ -631,7 +642,12 @@ class AgentService:
                 # Depending on mem0 version, it might not return run-specific items if run_id is omitted, or it might return all.
                 # Assuming standard behavior: run_id=None -> search items without run_id OR all items?
                 # Usually we want items that are TRULY global (run_id is None).
-                global_results = self.memory_manager.search_memories(query, user_id=str(user_id), limit=limit)
+                global_results = self.memory_manager.search_memories(
+                    query, 
+                    user_id=str(user_id), 
+                    limit=limit,
+                    llm_settings=llm_settings # <--- 新增参数
+                )
                 g_mems = global_results.get('results', []) if isinstance(global_results, dict) else global_results
                 
                 for m in g_mems:

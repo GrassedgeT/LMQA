@@ -5,20 +5,22 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-def get_mem0_config():
+def get_mem0_config(llm_settings=None):
     """
     Constructs the configuration dictionary for Mem0.
+    Args:
+        llm_settings (dict, optional): Contains 'provider', 'model', 'api_key', 'base_url'.
     """
     
-    # Embedding Configuration (Gemini)
+    # 1. Embedding 和 数据库配置 (保持不变)
     embedder_config = {
         "provider": "gemini",
         "config": {
             "model": "models/text-embedding-004",
+            "api_key": os.getenv("GOOGLE_API_KEY") # 确保环境变量里有这个
         }
     }
 
-    # Vector Store Configuration (Qdrant)
     vector_store_config = {
         "provider": "qdrant",
         "config": {
@@ -29,27 +31,43 @@ def get_mem0_config():
         }
     }
     
-    # Graph Store Configuration (Neo4j)
     graph_store_config = {
         "provider": "neo4j",
         "config": {
             "url": os.getenv("NEO4J_URI", "neo4j://localhost:7687"),
             "username": os.getenv("NEO4J_USERNAME", "neo4j"),
             "password": os.getenv("NEO4J_PASSWORD"),
-            "database": "neo4j"
         }
     }
 
-    # LLM Configuration (OpenAI Compatible)
-    llm_config = {
-        "provider": "deepseek",
+    # 2. 动态构建 LLM 配置
+    # 默认配置（如果没有传入 llm_settings，作为兜底）
+    default_llm_config = {
+        "provider": "openai", 
         "config": {
-            "model": "deepseek-chat",  # default model
+            "model": "deepseek-chat",
+            "api_key": os.getenv("DEEPSEEK_API_KEY"), 
+            "base_url": "https://api.deepseek.com/v1",
             "temperature": 0.2,
             "max_tokens": 2000,
-            "top_p": 1.0,
         }
     }
+
+    if llm_settings:
+        # 我们统一使用 'openai' provider 模式，因为 DeepSeek/Qwen/Kimi 都兼容 OpenAI 协议
+        # 这样兼容性最好，不需要 Mem0 内部去适配各种非标准 provider
+        llm_config = {
+            "provider": "openai", 
+            "config": {
+                "model": llm_settings.get("model_name"),
+                "api_key": llm_settings.get("api_key"),
+                "base_url": llm_settings.get("base_url"),
+                "temperature": 0.2,
+                "max_tokens": 2000,
+            }
+        }
+    else:
+        llm_config = default_llm_config
 
     config = {
         "embedder": embedder_config,
