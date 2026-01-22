@@ -1,0 +1,206 @@
+# LMQA 评测配置文件
+
+# ================================
+# 系统配置
+# ================================
+system:
+  # 后端API地址
+  backend_url: "http://localhost:5000"
+  
+  # 认证信息（如果需要）
+  auth:
+    username: "test2"
+    password: "030620as"
+  
+  # 请求配置
+  timeout: 600  # 请求超时时间（秒）
+  max_retries: 3  # 最大重试次数
+  retry_delay: 2  # 重试延迟（秒）
+
+# ================================
+# 评测配置
+# ================================
+evaluation:
+  # 要评测的benchmark列表
+  benchmarks:
+    - longbench
+    - locomo
+  
+  # 采样策略
+  sampling:
+    max_samples: 2  # null表示评测全部样本，设置数字限制样本数
+    random_seed: 42
+    shuffle: false  # 是否打乱数据
+  
+  # 批处理配置
+  batch:
+    enabled: true
+    batch_size: 10  # 每批处理样本数
+    delay_between_batches: 1  # 批次间延迟（秒）
+  
+  # 输出配置
+  output:
+    save_predictions: true  # 保存预测结果
+    save_metrics: true  # 保存评测指标
+    save_errors: true  # 保存错误日志
+    result_dir: "results"  # 结果保存目录
+    timestamp_format: "%Y%m%d_%H%M%S"  # 时间戳格式
+
+# ================================
+# LongBench 配置
+# ================================
+longbench:
+  # 数据目录
+  data_dir: "benchmarks/longbench"
+  prompt_path: "config/dataset2prompt.json"
+  max_len_path: "config/dataset2maxlen.json"
+  # 要评测的任务列表
+  tasks:
+    - narrativeqa
+    - qasper
+    - multifieldqa_en
+    - multifieldqa_zh
+    - hotpotqa
+    - 2wikimqa
+  
+  # 任务特定配置
+  task_config:
+    narrativeqa:
+      max_samples: 200
+      metrics: ["f1", "em", "rougeL"]
+    
+    qasper:
+      max_samples: 200
+      metrics: ["f1", "em"]
+    
+    multifieldqa_en:
+      max_samples: 150
+      metrics: ["f1", "rougeL"]
+    
+    multifieldqa_zh:
+      max_samples: 150
+      metrics: ["f1", "rougeL"]
+      language: "zh"
+    
+    hotpotqa:
+      max_samples: 200
+      metrics: ["f1", "em"]
+    
+    2wikimqa:
+      max_samples: 200
+      metrics: ["f1", "em"]
+# ================================
+# LOCOMO 配置
+# ================================
+
+locomo:
+  data_dir: "benchmarks/locomo"    # 确保这一行存在且没有拼写错误
+  file_pattern: "locomo10.json"   # 指定你的文件名
+# ================================
+# LooGLE 配置
+# ================================
+loogle:
+  # 数据目录
+  data_dir: "benchmarks/loogle"
+  
+  # 任务列表
+  tasks:
+    - shortdep_qa
+    - longdep_qa
+  
+  # 任务配置
+  task_config:
+    shortdep_qa:
+      max_samples: 100
+      metrics: ["f1", "em"]
+    
+    longdep_qa:
+      max_samples: 100
+      metrics: ["f1", "em", "rouge_l"]
+
+# ================================
+# 评测指标配置
+# ================================
+metrics:
+  # F1 Score配置
+  f1:
+    enabled: true
+    case_sensitive: false
+    remove_punctuation: true
+  
+  # Exact Match配置
+  em:
+    enabled: true
+    case_sensitive: false
+    normalize_whitespace: true
+  
+  # ROUGE配置
+  rouge:
+    enabled: true
+    rouge_types: ["rouge1", "rouge2", "rougeL"]
+  
+  # BLEU配置
+  bleu:
+    enabled: false
+    max_order: 4
+  
+  # BERTScore配置
+  bertscore:
+    enabled: false
+    model: "bert-base-uncased"
+    device: "cpu"
+
+# ================================
+# 性能监控配置
+# ================================
+monitoring:
+  enabled: true
+  
+  # 记录的指标
+  metrics:
+    - latency  # 延迟
+    - memory_usage  # 内存使用
+    - tokens_used  # token使用量
+  
+  # 采样间隔
+  sample_interval: 10  # 每10个样本记录一次
+
+# ================================
+# 日志配置
+# ================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 日志文件
+  file:
+    enabled: true
+    path: "logs/evaluation.log"
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+  
+  # 控制台输出
+  console:
+    enabled: true
+    colored: true
+
+# ================================
+# 高级配置
+# ================================
+advanced:
+  # 并行处理
+  parallel:
+    enabled: false
+    num_workers: 4
+  
+  # 缓存配置
+  cache:
+    enabled: true
+    cache_dir: ".cache"
+    ttl: 86400  # 缓存有效期（秒）
+  
+  # 错误处理
+  error_handling:
+    skip_on_error: true  # 遇到错误时跳过该样本
+    save_error_details: true  # 保存错误详情
+    max_consecutive_errors: 10  # 最大连续错误数，超过则停止

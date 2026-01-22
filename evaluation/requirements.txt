@@ -1,0 +1,31 @@
+# LMQA评测模块依赖
+
+# 核心依赖
+requests>=2.31.0
+pyyaml>=6.0
+tqdm>=4.65.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 评测指标
+rouge-score>=0.1.2
+nltk>=3.8.1
+scikit-learn>=1.3.0
+
+# 可选：BERTScore（较大，按需安装）
+# bert-score>=0.3.13
+# transformers>=4.30.0
+# torch>=2.0.0
+
+# 数据处理
+datasets>=2.14.0
+jsonlines>=4.0.0
+
+# 日志和监控
+colorlog>=6.7.0
+psutil>=5.9.5
+
+# 开发工具
+pytest>=7.4.0
+black>=23.7.0
+flake8>=6.1.0
