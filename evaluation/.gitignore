@@ -1,0 +1,7 @@
+# 忽略所有数据集文件夹
+benchmarks/
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+# 忽略结果文件（除非你想提交评测报告）
+results/
