@@ -60,12 +60,10 @@ export default function ProfilePage() {
   const loadProviders = useCallback(async () => {
     try {
       const data = await modelConfigAPI.getProviders();
-      // API 返回的数据结构可能是 { providers: {...} } 或直接是 providers
       setProviders(data?.providers || data || {});
     } catch (err) {
       console.error('加载模型提供商失败:', err);
       handleError(err, '加载模型提供商失败');
-      // 即使失败也设置空对象，避免 UI 崩溃
       setProviders({});
     }
   }, []);
@@ -74,12 +72,10 @@ export default function ProfilePage() {
     try {
       setLoading(true);
       const data = await modelConfigAPI.getModelConfigs();
-      // API 返回的数据结构可能是 { configs: [...] } 或直接是 configs
       setModelConfigs(data?.configs || data || []);
     } catch (err) {
       console.error('加载模型配置失败:', err);
       handleError(err, '加载模型配置失败');
-      // 即使失败也设置空数组，避免 UI 崩溃
       setModelConfigs([]);
     } finally {
       setLoading(false);
@@ -254,6 +250,9 @@ export default function ProfilePage() {
     }
   };
 
+  // 辅助函数：判断是否是自定义模型模式（如 OpenAI 或 models 列表为空）
+  const isCustomModel = configForm.provider === 'openai' || (configForm.provider && providers[configForm.provider]?.models.length === 0);
+
   if (loading && !user) {
     return (
       <div className="profile-page">
@@ -406,7 +405,7 @@ export default function ProfilePage() {
                           setConfigForm({
                             ...configForm,
                             provider,
-                            model_name: '',
+                            model_name: '', // 切换提供商清空模型名
                             base_url: providers[provider]?.base_url || '',
                           });
                         }}
@@ -422,21 +421,36 @@ export default function ProfilePage() {
                         )}
                       </select>
                     </div>
+
                     {configForm.provider && (
                       <div className="form-group">
                         <label>模型名称</label>
-                        <select
-                          value={configForm.model_name}
-                          onChange={(e) => setConfigForm({ ...configForm, model_name: e.target.value })}
-                          disabled={!!editingConfig}
-                        >
-                          <option value="">选择模型</option>
-                          {providers[configForm.provider]?.models.map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))}
-                        </select>
+                        {isCustomModel ? (
+                          // 1. 自定义模型：显示输入框
+                          <input
+                            type="text"
+                            value={configForm.model_name}
+                            onChange={(e) => setConfigForm({ ...configForm, model_name: e.target.value })}
+                            placeholder="输入模型名称，例如 gpt-4o, claude-3-5-sonnet"
+                            disabled={!!editingConfig}
+                            className="form-control"
+                          />
+                        ) : (
+                          // 2. 预设模型：显示下拉框
+                          <select
+                            value={configForm.model_name}
+                            onChange={(e) => setConfigForm({ ...configForm, model_name: e.target.value })}
+                            disabled={!!editingConfig}
+                          >
+                            <option value="">选择模型</option>
+                            {providers[configForm.provider]?.models.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                        )}
                       </div>
                     )}
+
                     <div className="form-group">
                       <label>API Key</label>
                       <input
@@ -454,6 +468,11 @@ export default function ProfilePage() {
                         onChange={(e) => setConfigForm({ ...configForm, base_url: e.target.value })}
                         placeholder={configForm.provider ? providers[configForm.provider]?.base_url : 'Base URL'}
                       />
+                      {configForm.provider === 'openai' && (
+                         <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+                           如果您使用的是 OneAPI、NewAPI 或其他兼容服务，请输入完整的 API 地址（通常以 /v1 结尾）。
+                         </div>
+                      )}
                     </div>
                     <div className="form-group">
                       <label>
@@ -560,4 +579,3 @@ export default function ProfilePage() {
     </div>
   );
 }
-
