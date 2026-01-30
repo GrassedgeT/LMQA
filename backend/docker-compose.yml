@@ -1,0 +1,21 @@
+#使用docker-compose up -d来启动服务
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: lmqa-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    restart: always
+
+  neo4j:
+    image: neo4j:latest
+    container_name: lmqa-neo4j
+    ports:
+      - "7474:7474"  # Web Console
+      - "7687:7687"  # Bolt Protocol
+    environment:
+      - NEO4J_AUTH=neo4j/your_password  # 请将 your_password 替换为你想要的密码
+    restart: always

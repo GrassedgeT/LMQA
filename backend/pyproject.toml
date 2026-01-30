@@ -13,4 +13,7 @@ dependencies = [
     "cryptography>=41.0.0",
     "openai>=1.0.0",
     "mem0ai[graph]>=1.0.1",
+    "python-dotenv>=1.2.1",
+    "google-generativeai>=0.8.5",
+    "google-genai>=1.54.0",
 ]

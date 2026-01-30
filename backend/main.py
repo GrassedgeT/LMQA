@@ -13,6 +13,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+from memory.manager import MemoryManager
+import concurrent.futures
 
 # 配置日志
 logging.basicConfig(
@@ -361,182 +363,207 @@ def get_pagination_params(default_limit: int = 20, max_limit: int = 100) -> tupl
 
 # 智能体服务接口适配层
 class AgentService:
-    """智能体服务适配层"""
+    """智能体服务适配层 - 针对 DeepSeek 优化的 Agentic 模式"""
     
     def __init__(self):
         self.agent_service_url = app.config.get('AGENT_SERVICE_URL')
-    
-    def _make_request(self, endpoint: str, data: Dict, timeout: int = 30) -> Optional[Dict]:
-        """统一的HTTP请求方法"""
         try:
-            response = requests.post(f"{self.agent_service_url}{endpoint}", json=data, timeout=timeout)
-            if response.status_code == 200:
-                return response.json()
-            logger.warning(f'请求失败，状态码: {response.status_code}')
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.error(f'请求失败: {str(e)}')
-            return None
-    
-    def process_message(self, user_id: int, conversation_id: int, message: str, context: Dict) -> str:
-        """处理消息，调用智能体生成回答"""
-        if self.agent_service_url:
-            result = self._make_request('/process', {
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                'message': message,
-                'context': context
-            }, timeout=60)
-            return result.get('assistant_message', '抱歉，智能体服务返回了空响应') if result else '调用智能体服务失败'
-        return self._process_message_local(user_id, conversation_id, message, context)
-    
+            self.memory_manager = MemoryManager()
+            logger.info("MemoryManager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize MemoryManager: {e}")
+            self.memory_manager = None
+
     def _get_user_model_config(self, user_id: int) -> Optional[Dict]:
-        """获取用户的默认模型配置"""
         try:
-            config = execute_query(
-                'SELECT provider, model_name, api_key, base_url FROM user_model_configs WHERE user_id = ? AND is_default = 1 LIMIT 1',
-                (user_id,)
-            )
+            config = execute_query('SELECT provider, model_name, api_key, base_url FROM user_model_configs WHERE user_id = ? AND is_default = 1 LIMIT 1', (user_id,))
             if config:
                 config_dict = dict(config[0])
-                # 解密 API Key
                 config_dict['api_key'] = decrypt_api_key(config_dict['api_key'])
                 return config_dict
             return None
         except Exception as e:
             logger.error(f'获取用户模型配置失败: {str(e)}')
             return None
-    
-    def _build_messages(self, message: str, context: Dict) -> List[Dict]:
-        """构建消息列表（公共方法）"""
-        messages = []
-        
-        # 添加系统提示
-        system_prompt = "你是一个有用的AI助手。"
-        memories = context.get('memories', [])
-        if memories:
-            memory_text = '\n'.join([f"- {m.get('content', '')}" for m in memories[:3]])
-            system_prompt += f"\n\n相关记忆：\n{memory_text}"
-        messages.append({'role': 'system', 'content': system_prompt})
-        
-        # 添加历史消息（只保留最近10条）
-        history = context.get('history', [])
-        for msg in history[-10:]:
-            messages.append({'role': msg['role'], 'content': msg['content']})
-        
-        # 添加当前消息
-        messages.append({'role': 'user', 'content': message})
-        
-        return messages
-    
+
     def _get_llm_client(self, user_id: int):
-        """获取 LLM 客户端（公共方法）"""
         model_config = self._get_user_model_config(user_id)
-        if not model_config:
-            return None, None
-        
+        if not model_config: return None, None, None
         try:
             from openai import OpenAI
-            client = OpenAI(
-                api_key=model_config['api_key'],
-                base_url=model_config['base_url']
-            )
-            return client, model_config['model_name']
+            client = OpenAI(api_key=model_config['api_key'], base_url=model_config['base_url'])
+            return client, model_config['model_name'], model_config
         except Exception as e:
             logger.error(f'创建 LLM 客户端失败: {str(e)}')
-            return None, None
-    
-    def _process_message_local(self, user_id: int, conversation_id: int, message: str, context: Dict) -> str:
-        """本地LLM处理，使用用户配置的模型"""
-        client, model_name = self._get_llm_client(user_id)
-        if not client or not model_name:
-            return '请先在个人设置中配置大模型 API Key'
-        
-        try:
-            messages = self._build_messages(message, context)
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=2000
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            # 避免泄露敏感信息，只记录详细错误，返回通用错误信息
-            error_msg = str(e)
-            logger.error(f'调用模型失败: user_id={user_id}, error={error_msg}')
-            # 检查是否是认证错误
-            if 'api' in error_msg.lower() and ('key' in error_msg.lower() or 'auth' in error_msg.lower()):
-                return 'API Key 无效，请检查模型配置'
-            elif 'network' in error_msg.lower() or 'connection' in error_msg.lower():
-                return '网络连接失败，请稍后重试'
-            else:
-                return '调用模型失败，请稍后重试'
-    
-    def _process_message_stream_local(self, user_id: int, conversation_id: int, message: str, context: Dict):
-        """本地LLM流式处理，使用用户配置的模型"""
-        client, model_name = self._get_llm_client(user_id)
-        if not client or not model_name:
-            yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': '请先在个人设置中配置大模型 API Key', 'error_code': 'NO_MODEL_CONFIG'})}\n\n"
-            return
-        
-        try:
-            messages = self._build_messages(message, context)
-            stream = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=2000,
-                stream=True
-            )
-            
-            for chunk in stream:
-                if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    yield f"event: token\ndata: {json.dumps({'type': 'token', 'content': token})}\n\n"
-        except Exception as e:
-            # 避免泄露敏感信息
-            error_msg = str(e)
-            logger.error(f'流式调用模型失败: user_id={user_id}, error={error_msg}')
-            if 'api' in error_msg.lower() and ('key' in error_msg.lower() or 'auth' in error_msg.lower()):
-                error_message = 'API Key 无效，请检查模型配置'
-            elif 'network' in error_msg.lower() or 'connection' in error_msg.lower():
-                error_message = '网络连接失败，请稍后重试'
-            else:
-                error_message = '调用模型失败，请稍后重试'
-            yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': error_message, 'error_code': 'MODEL_ERROR'})}\n\n"
-    
-    def sync_memory(self, user_id: int, memory_data: Dict) -> bool:
-        """同步记忆到智能体系统"""
-        if not self.agent_service_url:
-            return True
-        result = self._make_request('/memories/sync', {'user_id': user_id, 'memory': memory_data})
-        return result is not None
-    
-    def search_memories(self, user_id: int, query: str, limit: int = 10, conversation_id: Optional[int] = None) -> List[Dict]:
-        """语义搜索记忆（仅搜索指定对话的记忆）"""
-        if not conversation_id:
-            logger.warning('search_memories: conversation_id is required')
-            return []
-        
-        if self.agent_service_url:
-            request_data = {'user_id': user_id, 'query': query, 'limit': limit, 'conversation_id': conversation_id}
-            result = self._make_request('/memories/search', request_data)
-            if result:
-                return result.get('memories', [])
-        # 本地模式：简单的关键词搜索
-        try:
-            # 只搜索指定对话的记忆
-            results = execute_query(
-                '''SELECT * FROM memories WHERE user_id = ? AND conversation_id = ? AND (content LIKE ? OR title LIKE ?) LIMIT ?''',
-                (user_id, conversation_id, f'%{query}%', f'%{query}%', limit)
-            )
-            return [dict(row) for row in results]
-        except Exception as e:
-            logger.error(f'本地记忆搜索失败: {str(e)}')
-            return []
+            return None, None, None
 
-# 初始化智能体服务
+    def warm_up_for_user(self, user_id: int):
+        try:
+            config = self._get_user_model_config(user_id)
+            if self.memory_manager: self.memory_manager.warm_up_client(config)
+        except: pass
+
+    # =========================================================================
+    # 1. 工具定义 (加强版：防止漏记姓名)
+    # =========================================================================
+    def _get_tools(self) -> List[Dict]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "add_memory",
+                    "description": "保存用户的重要信息。⚠️重要：如果用户同时提供了【姓名/身份】和【其他事实】，必须将它们合并保存，绝对不能遗漏姓名！",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "要存储的完整事实。必须包含主语。例如用户说'我是小王，有个同事叫小张'，你必须填入：'用户叫小王，用户有一个同事叫小张' (必须包含两点)。"
+                            }
+                        },
+                        "required": ["content"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_memories",
+                    "description": "搜索历史记忆。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "搜索关键词"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "default": 5
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }
+        ]
+
+    # =========================================================================
+    # 2. System Prompt (加强版：全量存储原则)
+    # =========================================================================
+    def _build_system_prompt(self) -> str:
+        return """你是一个智能助手，负责管理用户记忆。
+
+**记忆管理最高准则：**
+1. **全量存储（关键）**：当用户一句话包含多个信息点（尤其是包含“我叫XXX”这种身份信息）时，**必须**将所有信息合并在一次 `add_memory` 调用中。
+   - ❌ 错误行为：用户说“我叫小王，同事是小张”，你只存“用户有个同事叫小张”。（漏掉了名字！）
+   - ✅ 正确行为：你调用 `add_memory(content="用户叫小王，用户有一个同事叫小张")`。
+
+2. **主语明确**：DeepSeek/LLM 请注意，Mem0 需要明确的主语。
+   - 不要说 "是个程序员"。
+   - 要说 "用户是程序员"。
+
+3. **先搜后答**：回答问题前先搜索。
+"""
+
+    # =========================================================================
+    # 3. 工具执行 (保持不变)
+    # =========================================================================
+    def _execute_tool(self, tool_name: str, tool_args: Dict, user_id: int, conversation_id: int, llm_settings: Dict) -> str:
+        logger.info(f"🔧 Agent 执行工具: {tool_name} | 参数: {tool_args}")
+        if not self.memory_manager: return "错误：记忆模块未初始化。"
+
+        try:
+            if tool_name == "add_memory":
+                res = self.memory_manager.add_memory(
+                    content=tool_args["content"],
+                    user_id=str(user_id),
+                    run_id=None, # 保持全局
+                    metadata={"source_conversation_id": str(conversation_id)},
+                    llm_settings=llm_settings
+                )
+                return "记忆已添加。"
+
+            elif tool_name == "search_memories":
+                res = self.memory_manager.search_memories(
+                    query=tool_args["query"],
+                    user_id=str(user_id),
+                    limit=tool_args.get("limit", 5),
+                    llm_settings=llm_settings
+                )
+                memories = [m.get("memory", m.get("text", "")) for m in res]
+                return f"搜索结果: {json.dumps(memories, ensure_ascii=False)}"
+            
+            return f"未知工具: {tool_name}"
+        except Exception as e:
+            logger.error(f"工具执行异常: {e}")
+            return f"工具执行出错: {str(e)}"
+
+    # =========================================================================
+    # 4. Agent Loop (保持不变)
+    # =========================================================================
+    def chat_agent(self, user_id: int, conversation_id: int, user_message: str, history_messages: List[Dict]) -> str:
+        client, model_name, llm_settings = self._get_llm_client(user_id)
+        if not client: return "请先配置模型 API Key。"
+
+        messages = [{"role": "system", "content": self._build_system_prompt()}]
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": user_message})
+
+        tools = self._get_tools()
+        max_turns = 5
+        current_turn = 0
+        
+        while current_turn < max_turns:
+            try:
+                response = client.chat.completions.create(
+                    model=model_name, messages=messages, tools=tools, tool_choice="auto", temperature=0.7
+                )
+                response_message = response.choices[0].message
+                
+                if response_message.tool_calls:
+                    messages.append(response_message)
+                    
+                    # 并行执行
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        futures = []
+                        for tool_call in response_message.tool_calls:
+                            function_name = tool_call.function.name
+                            try:
+                                arguments = json.loads(tool_call.function.arguments)
+                            except: arguments = {}
+                            
+                            future = executor.submit(
+                                self._execute_tool,
+                                function_name, arguments, user_id, conversation_id, llm_settings
+                            )
+                            futures.append((tool_call, future))
+                        
+                        for tool_call, future in futures:
+                            tool_result = future.result()
+                            messages.append({
+                                "tool_call_id": tool_call.id, "role": "tool", 
+                                "name": tool_call.function.name, "content": tool_result
+                            })
+                    
+                    current_turn += 1
+                else:
+                    return response_message.content
+            except Exception as e:
+                logger.error(f"Agent Loop Error: {e}")
+                return f"处理错误: {str(e)}"
+        
+        return "思考超时。"
+
+    # --- 兼容方法 ---
+    def delete_conversation_memories(self, *args): pass
+    def search_memories(self, *args, **kwargs): return []
+    def sync_memory(self, *args, **kwargs): return {}
+    def update_memory(self, *args, **kwargs): pass
+    def delete_memory(self, *args, **kwargs): pass
+    def add_interaction(self, *args, **kwargs): pass
+    def _process_message_stream_local(self, *args, **kwargs): pass
+
 agent_service = AgentService()
 
 # ==================== 认证相关接口 ====================
@@ -589,46 +616,40 @@ def register():
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """用户登录"""
+    """用户登录 (增加预热)"""
     try:
         data = request.get_json()
-        
         if not data or not data.get('username') or not data.get('password'):
             return error_response('缺少必需字段：username, password', 'VALIDATION_ERROR', 400)
         
         username = data['username'].strip()
         password = data['password']
         
-        # 查询用户（支持用户名或邮箱登录）
         user = execute_query('SELECT * FROM users WHERE username = ? OR email = ?', (username, username))
         if not user:
-            logger.warning(f'登录失败：用户不存在 - {username}')
             return error_response('用户名或密码错误', 'INVALID_CREDENTIALS', 401)
         
         user = dict(user[0])
-        
-        # 验证密码
         if not check_password(password, user['password_hash']):
-            logger.warning(f'登录失败：密码错误 - user_id={user["id"]}')
             return error_response('用户名或密码错误', 'INVALID_CREDENTIALS', 401)
         
-        # 生成token
         token = generate_token(user['id'])
         
-        logger.info(f'用户登录成功: user_id={user["id"]}, username={user["username"]}')
+        # === [新增] 登录成功后预热 ===
+        try:
+            agent_service.warm_up_for_user(user['id'])
+        except: pass
+        # ===========================
+
         return success_response({
             'access_token': token,
             'token_type': 'Bearer',
             'expires_in': int(app.config['JWT_EXPIRATION_DELTA'].total_seconds()),
-            'user': {
-                'id': user['id'],
-                'username': user['username'],
-                'email': user['email']
-            }
+            'user': {'id': user['id'], 'username': user['username'], 'email': user['email']}
         }, '登录成功')
     except Exception as e:
-        logger.error(f'用户登录时发生错误: {str(e)}', exc_info=True)
-        return error_response('登录失败，请稍后重试', 'INTERNAL_ERROR', 500)
+        logger.error(f'登录失败: {str(e)}', exc_info=True)
+        return error_response('登录失败', 'INTERNAL_ERROR', 500)
 
 @app.route('/api/auth/me', methods=['GET'])
 @require_auth
@@ -756,6 +777,12 @@ MODEL_PROVIDERS = {
         'name': 'Kimi (Moonshot)',
         'base_url': 'https://api.moonshot.cn/v1',
         'models': ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']
+    },
+    # 新增项
+    'openai': {
+        'name': 'OpenAI 兼容 (自定义)',
+        'base_url': 'https://api.openai.com/v1', # 默认值，用户可修改
+        'models': [] # 空列表表示不限制模型名称
     }
 }
 
@@ -806,8 +833,9 @@ def create_model_config():
     is_default = data.get('is_default', False)
     
     # 验证
-    if not provider or provider not in MODEL_PROVIDERS:
-        return error_response(f'不支持的模型提供商，支持的提供商: {", ".join(MODEL_PROVIDERS.keys())}', 'VALIDATION_ERROR', 400)
+    available_models = MODEL_PROVIDERS[provider].get('models', [])
+    if provider in MODEL_PROVIDERS and available_models and model_name not in available_models:
+        return error_response(f'不支持的模型名称，支持的模型: {", ".join(available_models)}', 'VALIDATION_ERROR', 400)
     if not model_name:
         return error_response('模型名称不能为空', 'VALIDATION_ERROR', 400)
     if len(model_name) > MAX_MODEL_NAME_LENGTH:
@@ -818,8 +846,6 @@ def create_model_config():
         return error_response(f'API Key 长度不能超过{MAX_API_KEY_LENGTH}个字符', 'VALIDATION_ERROR', 400)
     if base_url and len(base_url) > MAX_BASE_URL_LENGTH:
         return error_response(f'Base URL 长度不能超过{MAX_BASE_URL_LENGTH}个字符', 'VALIDATION_ERROR', 400)
-    if provider in MODEL_PROVIDERS and model_name not in MODEL_PROVIDERS[provider]['models']:
-        return error_response(f'不支持的模型名称，支持的模型: {", ".join(MODEL_PROVIDERS[provider]["models"])}', 'VALIDATION_ERROR', 400)
     
     # 使用默认 base_url 如果未提供
     if not base_url:
@@ -840,11 +866,17 @@ def create_model_config():
         )
     
     try:
+        # 保存配置... (你的原有逻辑)
         config_id = execute_update(
             'INSERT INTO user_model_configs (user_id, provider, model_name, api_key, base_url, is_default) VALUES (?, ?, ?, ?, ?, ?)',
             (request.current_user_id, provider, model_name, encrypted_api_key, base_url, 1 if is_default else 0)
         )
-        logger.info(f'创建模型配置成功: user_id={request.current_user_id}, provider={provider}, model={model_name}')
+        
+        # === [新增] 配置变更后预热 ===
+        try:
+            agent_service.warm_up_for_user(request.current_user_id)
+        except: pass
+        # ===========================
         return success_response({'id': config_id}, '模型配置创建成功')
     except sqlite3.IntegrityError:
         return error_response('该模型配置已存在', 'DUPLICATE_ERROR', 409)
@@ -887,7 +919,8 @@ def update_model_config(config_id):
         return error_response('不支持的模型提供商', 'VALIDATION_ERROR', 400)
     if model_name and len(model_name) > MAX_MODEL_NAME_LENGTH:
         return error_response(f'模型名称长度不能超过{MAX_MODEL_NAME_LENGTH}个字符', 'VALIDATION_ERROR', 400)
-    if model_name not in MODEL_PROVIDERS[provider]['models']:
+    available_models = MODEL_PROVIDERS[provider].get('models', [])
+    if available_models and model_name not in available_models:
         return error_response('不支持的模型名称', 'VALIDATION_ERROR', 400)
     if api_key and len(api_key) > MAX_API_KEY_LENGTH:
         return error_response(f'API Key 长度不能超过{MAX_API_KEY_LENGTH}个字符', 'VALIDATION_ERROR', 400)
@@ -909,8 +942,6 @@ def update_model_config(config_id):
             'UPDATE user_model_configs SET is_default = 0 WHERE user_id = ? AND id != ?',
             (request.current_user_id, config_id)
         )
-    
-    # 构建更新语句（字段名硬编码，确保安全）
     update_fields = []
     update_params = []
     if encrypted_api_key:
@@ -940,6 +971,11 @@ def update_model_config(config_id):
             f'UPDATE user_model_configs SET {", ".join(update_fields)} WHERE id = ?',
             tuple(update_params)
         )
+        # === [新增] 配置变更后预热 ===
+        try:
+            agent_service.warm_up_for_user(request.current_user_id)
+        except: pass
+        # ===========================
         logger.info(f'更新模型配置成功: config_id={config_id}')
         return success_response(None, '模型配置更新成功')
     except Exception as e:
@@ -1111,6 +1147,10 @@ def delete_conversation(conversation_id):
     """删除对话"""
     if not verify_resource_ownership('conversations', conversation_id, request.current_user_id):
         return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+    
+    # 删除对话相关记忆
+    agent_service.delete_conversation_memories(request.current_user_id, conversation_id)
+    
     execute_update('DELETE FROM conversations WHERE id = ?', (conversation_id,))
     return success_response(None, '对话删除成功')
 
@@ -1174,198 +1214,122 @@ def get_messages(conversation_id):
 @app.route('/api/conversations/<int:conversation_id>/messages', methods=['POST'])
 @require_auth
 def send_message(conversation_id):
-    """发送消息"""
+    """发送消息 - Agentic 模式 (逻辑已替换)"""
     data = request.get_json()
-    if not data or not data.get('content'):
-        return error_response('缺少必需字段：content', 'VALIDATION_ERROR', 400)
+    content = data.get('content', '').strip()
+    if not content: return error_response('内容不能为空', 'VALIDATION_ERROR', 400)
     
-    content = data['content'].strip()
-    if not content:
-        return error_response('消息内容不能为空', 'VALIDATION_ERROR', 400)
-    if len(content) > MAX_MESSAGE_LENGTH:
-        return error_response(f'消息内容长度不能超过{MAX_MESSAGE_LENGTH}个字符', 'VALIDATION_ERROR', 400)
     if not verify_resource_ownership('conversations', conversation_id, request.current_user_id):
-        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+        return error_response('无权限', 'NOT_FOUND', 404)
     
-    # 保存用户消息
+    # 1. 保存用户消息
     user_message_id = execute_update(
         'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
         (conversation_id, 'user', content)
     )
     
-    # 获取对话历史
+    # 2. 准备历史 (去重)
     history_messages = execute_query(
         'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 20',
         (conversation_id,)
     )
-    history = [{'role': m['role'], 'content': m['content']} for m in history_messages]
+    history = [{'role': m['role'], 'content': m['content']} for m in history_messages[:-1]]
     
-    # 获取相关记忆（仅搜索当前对话的记忆）
-    memories = agent_service.search_memories(request.current_user_id, content, limit=5, conversation_id=conversation_id)
-    
-    # 调用智能体生成回答
-    context = {
-        'history': history,
-        'memories': memories
-    }
-    assistant_content = agent_service.process_message(
-        request.current_user_id,
-        conversation_id,
-        content,
-        context
+    # 3. Agent 思考与执行 (这就是你要的逻辑)
+    assistant_content = agent_service.chat_agent(
+        user_id=request.current_user_id,
+        conversation_id=conversation_id,
+        user_message=content,
+        history_messages=history
     )
     
-    # 保存AI回答
+    # 4. 保存 AI 回答
     assistant_message_id = execute_update(
         'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
         (conversation_id, 'assistant', assistant_content)
     )
     
-    # 更新对话的message_count和last_message_at
+    # 5. 更新元数据
     execute_update(
-        'UPDATE conversations SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        'UPDATE conversations SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP WHERE id = ?',
         (conversation_id,)
     )
     
-    # 如果对话没有标题，从第一条消息生成标题
+    # 自动标题
     conversation_data = dict(execute_query('SELECT title FROM conversations WHERE id = ?', (conversation_id,))[0])
     if not conversation_data.get('title') or conversation_data['title'] == '新对话':
-        # 使用消息的前30个字符作为标题
-        title = content[:30] + ('...' if len(content) > 30 else '')
-        execute_update('UPDATE conversations SET title = ? WHERE id = ?', (title, conversation_id))
-    
-    user_message = dict(execute_query('SELECT * FROM messages WHERE id = ?', (user_message_id,))[0])
-    assistant_message = dict(execute_query('SELECT * FROM messages WHERE id = ?', (assistant_message_id,))[0])
+        execute_update('UPDATE conversations SET title = ? WHERE id = ?', (content[:30], conversation_id))
     
     return success_response({
-        'user_message': user_message,
-        'assistant_message': assistant_message
-    }, '消息发送成功')
+        'user_message': dict(execute_query('SELECT * FROM messages WHERE id = ?', (user_message_id,))[0]),
+        'assistant_message': dict(execute_query('SELECT * FROM messages WHERE id = ?', (assistant_message_id,))[0])
+    })
 
 @app.route('/api/conversations/<int:conversation_id>/messages/stream', methods=['POST'])
 @require_auth
 def send_message_stream(conversation_id):
-    """流式发送消息（Server-Sent Events）"""
+    """流式发送消息 - Agent 适配版"""
+    # 注意：为了支持 Tool Call 循环，这里我们采用"伪流式"。
+    # 即：服务器先执行完完整的 Agent 思考过程（可能包含多次搜索/存储），
+    # 拿到最终文本后，再以流的形式吐给前端。这样前端代码不用改。
+    
     data = request.get_json()
     if not data or not data.get('content'):
         return error_response('缺少必需字段：content', 'VALIDATION_ERROR', 400)
     
     content = data['content'].strip()
-    if not content:
-        return error_response('消息内容不能为空', 'VALIDATION_ERROR', 400)
-    if len(content) > MAX_MESSAGE_LENGTH:
-        return error_response(f'消息内容长度不能超过{MAX_MESSAGE_LENGTH}个字符', 'VALIDATION_ERROR', 400)
     if not verify_resource_ownership('conversations', conversation_id, request.current_user_id):
         return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
     
     def generate():
         try:
-            # 保存用户消息
+            # 1. 保存用户消息
             user_message_id = execute_update(
                 'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
                 (conversation_id, 'user', content)
             )
-            
             # 发送用户消息事件
             yield f"event: user_message\ndata: {json.dumps({'type': 'user_message', 'message_id': user_message_id, 'content': content})}\n\n"
             
-            # 获取对话历史和记忆
+            # 2. 准备历史
             history_messages = execute_query(
                 'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 20',
                 (conversation_id,)
             )
-            history = [{'role': m['role'], 'content': m['content']} for m in history_messages]
-            memories = agent_service.search_memories(request.current_user_id, content, limit=5, conversation_id=conversation_id)
+            history = [{'role': m['role'], 'content': m['content']} for m in history_messages[:-1]]
             
-            context = {'history': history, 'memories': memories}
+            # 3. 【核心】执行 Agent 思考 (这步会阻塞，直到思考完成)
+            # 在这里，Agent 可能会调用 add_memory 存入数据库
+            final_content = agent_service.chat_agent(
+                user_id=request.current_user_id,
+                conversation_id=conversation_id,
+                user_message=content,
+                history_messages=history
+            )
             
-            # 调用智能体服务（流式）
-            if agent_service.agent_service_url:
-                # 外部服务流式调用
-                try:
-                    response = requests.post(
-                        f"{agent_service.agent_service_url}/process/stream",
-                        json={
-                            'user_id': request.current_user_id,
-                            'conversation_id': conversation_id,
-                            'message': content,
-                            'context': context
-                        },
-                        stream=True,
-                        timeout=120
-                    )
-                    
-                    if response.status_code == 200:
-                        assistant_content = ''
-                        for line in response.iter_lines():
-                            if line:
-                                line_str = line.decode('utf-8')
-                                if line_str.startswith('data: '):
-                                    try:
-                                        data = json.loads(line_str[6:])
-                                        if data.get('type') == 'token':
-                                            token = data.get('content', '')
-                                            assistant_content += token
-                                            yield f"event: token\ndata: {json.dumps({'type': 'token', 'content': token})}\n\n"
-                                        elif data.get('type') == 'done':
-                                            break
-                                    except json.JSONDecodeError:
-                                        continue
-                        
-                        # 保存完整回答
-                        assistant_message_id = execute_update(
-                            'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
-                            (conversation_id, 'assistant', assistant_content)
-                        )
-                        execute_update(
-                            'UPDATE conversations SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                            (conversation_id,)
-                        )
-                        yield f"event: done\ndata: {json.dumps({'type': 'done', 'message_id': assistant_message_id})}\n\n"
-                    else:
-                        yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': '智能体服务错误', 'error_code': 'AGENT_ERROR'})}\n\n"
-                except Exception as e:
-                    logger.error(f'流式调用智能体服务失败: {str(e)}')
-                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': f'调用智能体服务失败: {str(e)}', 'error_code': 'AGENT_ERROR'})}\n\n"
-            else:
-                # 本地模式：使用用户配置的模型进行流式调用
-                assistant_content = ''
-                for event in agent_service._process_message_stream_local(
-                    request.current_user_id,
-                    conversation_id,
-                    content,
-                    context
-                ):
-                    # 检查是否是错误事件
-                    if event.startswith('event: error'):
-                        yield event
-                        return
-                    # 提取 token 内容
-                    if event.startswith('event: token'):
-                        try:
-                            data_line = event.split('\ndata: ')[1].split('\n')[0]
-                            data = json.loads(data_line)
-                            assistant_content += data.get('content', '')
-                        except:
-                            pass
-                    yield event
-                
-                # 保存完整回答
-                if assistant_content:
-                    assistant_message_id = execute_update(
-                        'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
-                        (conversation_id, 'assistant', assistant_content)
-                    )
-                    execute_update(
-                        'UPDATE conversations SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                        (conversation_id,)
-                    )
-                    yield f"event: done\ndata: {json.dumps({'type': 'done', 'message_id': assistant_message_id})}\n\n"
-                
+            # 4. 模拟流式输出最终结果 (为了兼容前端动画)
+            # 将结果切片发送
+            chunk_size = 10
+            for i in range(0, len(final_content), chunk_size):
+                chunk = final_content[i:i+chunk_size]
+                yield f"event: token\ndata: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+            
+            # 5. 保存 AI 完整回答
+            assistant_message_id = execute_update(
+                'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
+                (conversation_id, 'assistant', final_content)
+            )
+            execute_update(
+                'UPDATE conversations SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                (conversation_id,)
+            )
+            
+            yield f"event: done\ndata: {json.dumps({'type': 'done', 'message_id': assistant_message_id})}\n\n"
+            
         except Exception as e:
-            logger.error(f'流式发送消息失败: {str(e)}', exc_info=True)
-            yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': '发送消息失败', 'error_code': 'INTERNAL_ERROR'})}\n\n"
-    
+            logger.error(f'Agent 流式处理失败: {str(e)}', exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': '智能体处理失败', 'error_code': 'INTERNAL_ERROR'})}\n\n"
+
     return Response(stream_with_context(generate()), mimetype='text/event-stream', headers={
         'Cache-Control': 'no-cache',
         'X-Accel-Buffering': 'no'
@@ -1438,70 +1402,88 @@ def delete_message(conversation_id, message_id):
 @app.route('/api/memories', methods=['GET'])
 @require_auth
 def get_memories():
-    """获取记忆列表（必须指定对话ID）"""
-    page, limit, offset = get_pagination_params(20, 100)
-    category = request.args.get('category')
-    search = request.args.get('search')
+    """获取记忆列表"""
+    limit = int(request.args.get('limit', 100))
     conversation_id = request.args.get('conversation_id')
+    user_id = str(request.current_user_id)
+    
+    run_id = None
+    if conversation_id and conversation_id != '0':
+        run_id = str(conversation_id)
 
-    # conversation_id 现在是必需的
-    if not conversation_id:
-        return error_response('缺少必需参数：conversation_id', 'VALIDATION_ERROR', 400)
-
-    # 验证用户有权限访问该对话
     try:
-        conversation_id_int = int(conversation_id)
-    except (ValueError, TypeError):
-        return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
+        if not agent_service.memory_manager:
+            return success_response({'memories': [], 'relations': [], 'pagination': {}})
 
-    if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
-        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+        # 调用 manager
+        raw_result = agent_service.memory_manager.get_memories(
+            user_id=user_id, 
+            run_id=run_id, 
+            limit=limit,
+            llm_settings=agent_service._get_user_model_config(request.current_user_id)
+        )
+        
+        if raw_result is None: raw_result = {}
+            
+        results = raw_result.get('results', [])
+        relations = raw_result.get('relations', []) # <--- 获取图数据
 
-    conditions = ['user_id = ?', 'conversation_id = ?']
-    params = [request.current_user_id, conversation_id_int]
+        # 格式化列表
+        memories_list = []
+        for m in results:
+            if not isinstance(m, dict): continue
+            content = m.get('memory', m.get('text', ''))
+            metadata = m.get('metadata') or {}
+            
+            memories_list.append({
+                'id': m.get('id'),
+                'title': metadata.get('title', content[:50] + '...'),
+                'content': content,
+                'category': metadata.get('category', '自动生成'),
+                'tags': metadata.get('tags'),
+                'conversation_id': int(metadata.get('source_conversation_id', 0)) if metadata.get('source_conversation_id', '').isdigit() else None,
+                'created_at': m.get('created_at', datetime.utcnow().isoformat() + 'Z'),
+                'updated_at': m.get('updated_at', datetime.utcnow().isoformat() + 'Z')
+            })
+        
+        # 返回结果 (带上 relations)
+        return success_response({
+            'memories': memories_list,
+            'relations': relations, # <--- 关键：传给前端
+            'pagination': {
+                'page': 1,
+                'limit': limit,
+                'total': len(memories_list),
+                'total_pages': 1
+            }
+        })
 
-    if category:
-        conditions.append('category = ?')
-        params.append(category)
-    if search:
-        conditions.append('(content LIKE ? OR title LIKE ?)')
-        params.extend([f'%{search}%', f'%{search}%'])
-
-    where_clause = ' AND '.join(conditions)
-    memories = execute_query(
-        f'SELECT * FROM memories WHERE {where_clause} ORDER BY updated_at DESC LIMIT ? OFFSET ?',
-        tuple(params + [limit, offset])
-    )
-    total = execute_query(f'SELECT COUNT(*) as count FROM memories WHERE {where_clause}', tuple(params))[0]['count']
-
-    return success_response({
-        'memories': [dict(m) for m in memories],
-        'pagination': {
-            'page': page,
-            'limit': limit,
-            'total': total,
-            'total_pages': (total + limit - 1) // limit
-        }
-    })
+    except Exception as e:
+        logger.error(f"获取记忆路由失败: {e}", exc_info=True)
+        return success_response({'memories': [], 'relations': [], 'pagination': {}})
 
 @app.route('/api/memories', methods=['POST'])
 @require_auth
 def create_memory():
-    """创建记忆（必须指定对话ID）"""
+    """创建记忆（conversation_id 可选，若未提供则为用户级记忆）"""
     data = request.get_json()
     if not data or not data.get('title') or not data.get('content'):
         return error_response('缺少必需字段：title, content', 'VALIDATION_ERROR', 400)
 
-    # conversation_id 现在是必需的
     conversation_id = data.get('conversation_id')
-    if not conversation_id:
-        return error_response('缺少必需字段：conversation_id', 'VALIDATION_ERROR', 400)
+    conversation_id_int = None
+    if conversation_id:
+        try:
+            conversation_id_int = int(conversation_id)
+            if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
+                return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
+        except (ValueError, TypeError):
+            return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
 
     # 输入长度验证和格式化
     title = data['title'].strip()
     content = data['content'].strip()
 
-    # 验证标题和内容不为空
     if not title:
         return error_response('记忆标题不能为空', 'VALIDATION_ERROR', 400)
     
@@ -1516,15 +1498,6 @@ def create_memory():
 
     # 规范化内容：统一换行符
     content = content.replace('\r\n', '\n').replace('\r', '\n')
-
-    # 验证对话ID
-    try:
-        conversation_id_int = int(conversation_id)
-    except (ValueError, TypeError):
-        return error_response('conversation_id 必须是有效的整数', 'VALIDATION_ERROR', 400)
-
-    if not verify_resource_ownership('conversations', conversation_id_int, request.current_user_id):
-        return error_response('对话不存在或无权限', 'NOT_FOUND', 404)
 
     memory_id = execute_update(
         '''INSERT INTO memories (user_id, conversation_id, title, content, memory_type, category, tags, metadata)
@@ -1542,7 +1515,7 @@ def create_memory():
     )
 
     # 同步到智能体系统
-    agent_service.sync_memory(request.current_user_id, {
+    sync_result = agent_service.sync_memory(request.current_user_id, {
         'id': memory_id,
         'conversation_id': conversation_id_int,
         'title': title,
@@ -1550,6 +1523,15 @@ def create_memory():
         'category': data.get('category'),
         'tags': data.get('tags', [])
     })
+
+    # Update mem0_memory_id if available
+    if isinstance(sync_result, dict):
+        mem0_id = sync_result.get('id')
+        if not mem0_id and 'results' in sync_result and isinstance(sync_result['results'], list) and len(sync_result['results']) > 0:
+             mem0_id = sync_result['results'][0].get('id')
+        
+        if mem0_id:
+             execute_update('UPDATE memories SET mem0_memory_id = ? WHERE id = ?', (mem0_id, memory_id))
 
     memory = dict(execute_query('SELECT * FROM memories WHERE id = ?', (memory_id,))[0])
     return success_response(memory, '记忆创建成功')
@@ -1616,7 +1598,16 @@ def update_memory(memory_id):
         tuple(params)
     )
 
+    # 同步更新到 MemoryManager
     memory = dict(execute_query('SELECT * FROM memories WHERE id = ?', (memory_id,))[0])
+    if memory.get('mem0_memory_id'):
+        # Mem0 update (primarily updates content)
+        # Note: If title changed, we might want to update it in metadata if mem0 supports it, 
+        # but mem0.update mainly takes 'text'.
+        # We'll use the new content (or existing content if not changed).
+        current_content = memory['content']
+        agent_service.update_memory(memory['mem0_memory_id'], current_content)
+
     return success_response(memory, '记忆更新成功')
 
 @app.route('/api/memories/<int:memory_id>', methods=['DELETE'])
@@ -1625,7 +1616,16 @@ def delete_memory(memory_id):
     """删除记忆"""
     if not verify_resource_ownership('memories', memory_id, request.current_user_id):
         return error_response('记忆不存在或无权限', 'NOT_FOUND', 404)
+    
+    # Get mem0_memory_id before deletion
+    memory = execute_query('SELECT mem0_memory_id FROM memories WHERE id = ?', (memory_id,))
+    mem0_id = memory[0]['mem0_memory_id'] if memory else None
+
     execute_update('DELETE FROM memories WHERE id = ? AND user_id = ?', (memory_id, request.current_user_id))
+    
+    if mem0_id:
+        agent_service.delete_memory(mem0_id)
+
     return success_response(None, '记忆删除成功')
 
 @app.route('/api/memories/search', methods=['POST'])

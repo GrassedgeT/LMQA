@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { memoryAPI } from '../api';
+import { memoryAPI, conversationAPI } from '../api';
 import { handleError, debounce } from '../utils';
 import HighlightText from '../components/HighlightText';
 import './MemoryPage.css';
 
 interface Memory {
-  id: number;
+  id: number | string;
   title: string;
   content: string;
   category?: string;
@@ -15,27 +15,51 @@ interface Memory {
   updated_at: string;
 }
 
+interface Relation {
+  source: string;
+  target: string;
+  relationship: string;
+}
+
+interface Conversation {
+  id: number;
+  title: string;
+}
+
 export default function MemoryPage() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<number>(0); // 0 = Global/All User Memories
+
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [relations, setRelations] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('');
-  const [showEditor, setShowEditor] = useState(false);
-  const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
-  const [formData, setFormData] = useState({
-    title: '',
-    content: '',
-    category: '',
-    tags: '',
-  });
+
+  // 加载会话列表
+  useEffect(() => {
+    const fetchConversations = async () => {
+      try {
+        const data = await conversationAPI.getConversations(1, 100);
+        setConversations(data.conversations);
+      } catch (err) {
+        console.error("Failed to load conversations", err);
+      }
+    };
+    fetchConversations();
+  }, []);
 
   // 使用防抖优化搜索
   const debouncedLoadMemories = useCallback(
-    debounce(async (searchValue: string, categoryValue: string) => {
+    debounce(async (searchValue: string, convId: number) => {
       try {
         setLoading(true);
-        const data = await memoryAPI.getMemories(1, 50, categoryValue || undefined, searchValue || undefined);
+        // If convId is 0, backend handles as global/user level if run_id is omitted or specifically handled
+        // Our updated API sends 'conversation_id' only if not null/undefined. 
+        // If we send 0, let's treat it as "Global" (run_id = None).
+        
+        const data = await memoryAPI.getMemories(convId, 1, 50, undefined, searchValue || undefined);
         setMemories(data.memories);
+        setRelations(data.relations || []);
       } catch (err) {
         handleError(err, '加载记忆失败');
       } finally {
@@ -46,192 +70,106 @@ export default function MemoryPage() {
   );
 
   useEffect(() => {
-    debouncedLoadMemories(search, category);
-  }, [search, category, debouncedLoadMemories]);
-
-  const loadMemories = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await memoryAPI.getMemories(1, 50, category || undefined, search || undefined);
-      setMemories(data.memories);
-    } catch (err) {
-      handleError(err, '加载记忆失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [search, category]);
-
-  const handleCreate = () => {
-    setEditingMemory(null);
-    setFormData({ title: '', content: '', category: '', tags: '' });
-    setShowEditor(true);
-  };
-
-  const handleEdit = (memory: Memory) => {
-    setEditingMemory(memory);
-    setFormData({
-      title: memory.title,
-      content: memory.content,
-      category: memory.category || '',
-      tags: typeof memory.tags === 'string' ? memory.tags : '',
-    });
-    setShowEditor(true);
-  };
-
-  const handleSave = async () => {
-    try {
-      const memoryData = {
-        title: formData.title,
-        content: formData.content,
-        category: formData.category || undefined,
-        tags: formData.tags ? formData.tags.split(',').map((t) => t.trim()) : undefined,
-      };
-      if (editingMemory) {
-        await memoryAPI.updateMemory(editingMemory.id, memoryData);
-      } else {
-        await memoryAPI.createMemory(memoryData);
-      }
-      setShowEditor(false);
-      await loadMemories();
-    } catch (err) {
-      handleError(err, '保存失败');
-    }
-  };
-
-  const handleDelete = async (memoryId: number) => {
-    if (!confirm('确定要删除这个记忆吗？')) return;
-    try {
-      await memoryAPI.deleteMemory(memoryId);
-      await loadMemories();
-    } catch (err) {
-      handleError(err, '删除失败');
-    }
-  };
+    debouncedLoadMemories(search, selectedConversationId);
+  }, [search, selectedConversationId, debouncedLoadMemories]);
 
   return (
-    <div className="memory-page">
-      <div className="memory-header">
-        <h1>记忆管理</h1>
-        <button onClick={handleCreate} className="create-btn">
-          <span>+</span>
-          <span>新建记忆</span>
-        </button>
-      </div>
-      <div className="memory-filters">
-        <input
-          type="text"
-          placeholder="搜索记忆..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="search-input"
-        />
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
-          <option value="">全部分类</option>
-          <option value="工作">工作</option>
-          <option value="学习">学习</option>
-          <option value="生活">生活</option>
-          <option value="其他">其他</option>
-        </select>
-      </div>
-      {loading ? (
-        <div style={{ textAlign: 'center', color: '#94a3b8', padding: '60px 0' }}>
-          <div style={{ fontSize: '24px', marginBottom: '12px' }}>⏳</div>
-          <div>加载中...</div>
+    <div className="memory-page-container">
+      <div className="memory-sidebar">
+        <h3>范围选择</h3>
+        <div 
+          className={`sidebar-item ${selectedConversationId === 0 ? 'active' : ''}`}
+          onClick={() => setSelectedConversationId(0)}
+        >
+          👤 用户全局记忆
         </div>
-      ) : (
-        <div className="memory-list">
-          {memories.length === 0 ? (
-            <div style={{ 
-              gridColumn: '1 / -1', 
-              textAlign: 'center', 
-              color: '#94a3b8', 
-              padding: '80px 20px',
-              fontSize: '16px'
-            }}>
-              <div style={{ fontSize: '64px', marginBottom: '16px', opacity: 0.5 }}>📝</div>
-              <div>暂无记忆</div>
-              <div style={{ marginTop: '8px', fontSize: '14px', opacity: 0.7 }}>点击上方"新建记忆"按钮创建第一个记忆</div>
+        <div className="sidebar-divider">对话记忆</div>
+        <div className="sidebar-list">
+          {conversations.map(c => (
+            <div 
+              key={c.id} 
+              className={`sidebar-item ${selectedConversationId === c.id ? 'active' : ''}`}
+              onClick={() => setSelectedConversationId(c.id)}
+              title={c.title}
+            >
+              💬 {c.title || '无标题对话'}
             </div>
-          ) : (
-            memories.map((memory) => (
-              <div key={memory.id} className="memory-card">
-                <div className="memory-header-card">
-                  <h3>
-                    <HighlightText text={memory.title} highlight={search} />
-                  </h3>
-                  <div className="memory-actions">
-                    <button onClick={() => handleEdit(memory)}>编辑</button>
-                    <button onClick={() => handleDelete(memory.id)} className="delete-btn">
-                      删除
-                    </button>
-                  </div>
-                </div>
-                <div className="memory-content">
-                  <HighlightText 
-                    text={memory.content.length > 200 ? memory.content.substring(0, 200) + '...' : memory.content} 
-                    highlight={search} 
-                  />
-                </div>
-                {memory.category && (
-                  <div className="memory-meta">
-                    <span className="category">分类: {memory.category}</span>
-                  </div>
-                )}
-              </div>
-            ))
-          )}
+          ))}
         </div>
-      )}
-      {showEditor && (
-        <div className="modal-overlay" onClick={() => setShowEditor(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>{editingMemory ? '编辑记忆' : '新建记忆'}</h2>
-            <div className="form-group">
-              <label>标题</label>
-              <input
-                type="text"
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="输入标题"
-              />
-            </div>
-            <div className="form-group">
-              <label>内容</label>
-              <textarea
-                value={formData.content}
-                onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                placeholder="输入内容"
-                rows={5}
-              />
-            </div>
-            <div className="form-group">
-              <label>分类</label>
-              <input
-                type="text"
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                placeholder="输入分类（可选）"
-              />
-            </div>
-            <div className="form-group">
-              <label>标签（逗号分隔）</label>
-              <input
-                type="text"
-                value={formData.tags}
-                onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-                placeholder="输入标签，用逗号分隔"
-              />
-            </div>
-            <div className="modal-actions">
-              <button onClick={() => setShowEditor(false)}>取消</button>
-              <button onClick={handleSave} className="save-btn">
-                保存
-              </button>
-            </div>
+      </div>
+
+      <div className="memory-content-area">
+        <div className="memory-header">
+          <h2>
+            {selectedConversationId === 0 
+              ? '用户全局记忆' 
+              : `对话记忆: ${conversations.find(c => c.id === selectedConversationId)?.title || '未知对话'}`}
+          </h2>
+          <div className="memory-search">
+            <input
+              type="text"
+              placeholder="搜索记忆内容..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
         </div>
-      )}
+
+        {loading ? (
+          <div className="loading-state">
+            <div className="spinner"></div>
+            <p>加载记忆图谱与列表...</p>
+          </div>
+        ) : (
+          <div className="memory-display">
+            {memories.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">📭</div>
+                <p>暂无相关记忆</p>
+              </div>
+            ) : (
+              <>
+                <div className="memory-section">
+                  <h3>📝 记忆列表 ({memories.length})</h3>
+                  <div className="memory-cards">
+                    {memories.map((memory) => (
+                      <div key={memory.id} className="memory-card-read">
+                        <div className="card-header">
+                          <span className="memory-id">#{typeof memory.id === 'string' ? memory.id.slice(0, 8) : memory.id}</span>
+                          <span className="memory-date">
+                            {new Date(memory.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div className="card-content">
+                          <HighlightText text={memory.content} highlight={search} />
+                        </div>
+                        <div className="card-tags">
+                          {memory.category && <span className="tag category">{memory.category}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {relations.length > 0 && (
+                  <div className="memory-section">
+                    <h3>🔗 关联图谱数据 ({relations.length})</h3>
+                    <div className="relations-list">
+                      {relations.map((rel, idx) => (
+                        <div key={idx} className="relation-item">
+                          <span className="node source">{rel.source}</span>
+                          <span className="arrow">── {rel.relationship} ──▶</span>
+                          <span className="node target">{rel.target}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
