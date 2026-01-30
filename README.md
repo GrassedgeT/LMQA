@@ -69,11 +69,15 @@ uv包管理器（管理python），npm(前端)
    source .venv/bin/activate
    ```
 
-3. 运行开发服务器：
+3. 启用docker(确保docker应用已经打开)
+   ```
+   docker-compose up -d
+   ```
+4. 运行开发服务器：
    ```
    uv run main.py
    ```
-4. 注意：
+5. 注意：
 * 所有python相关的依赖使用 'uv add xxx' 进行安装，不要使用 'pip install' ,如果 uv add 不好使，再考虑使用 'uv pip install xxx'
 * 运行python脚本使用 'uv run xxx.py' , 不要使用'python xxx.py'
    后端服务器将在 http://localhost:5000 上运行
