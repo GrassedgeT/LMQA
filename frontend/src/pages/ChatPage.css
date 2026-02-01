@@ -376,9 +376,9 @@
 }
 
 .message-content-wrapper {
-  padding: 16px 20px;
+  padding: 10px 16px;
   border-radius: 18px;
-  line-height: 1.7;
+  line-height: 1.5;
   word-wrap: break-word;
   font-size: 15px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -1281,11 +1281,12 @@
 }
 
 .memory-edit-actions {
-  display: flex !important;
+  display: flex;
   gap: 8px;
   justify-content: flex-end;
-  opacity: 1 !important;
-  visibility: visible !important;
+  opacity: 1;
+  visibility: visible;
+  margin-top: 8px; /* Add margin to separate from content */
 }
 
 .memory-save-btn,
@@ -1296,9 +1297,9 @@
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
-  opacity: 1 !important;
-  visibility: visible !important;
-  display: inline-block !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .memory-save-btn {

@@ -31,6 +31,14 @@ class MemoryManager:
 
         logger.info(f"⚡ 初始化 Mem0 客户端 (Hash: {config_hash})")
         config = get_mem0_config(llm_settings)
+        
+        # 记录 reranker 配置状态
+        if 'reranker' in config:
+            reranker_provider = config['reranker'].get('provider', 'unknown')
+            logger.info(f"✅ Reranker 已配置: provider={reranker_provider}")
+        else:
+            logger.info(f"ℹ️ Reranker 未配置")
+        
         client = Memory.from_config(config)
         self._clients[config_hash] = client
         return client
@@ -80,10 +88,37 @@ class MemoryManager:
                 return client.add(messages, **params)
             raise e
 
-    def search_memories(self, query: str, user_id: str, run_id: Optional[str] = None, limit: int = 5, llm_settings: Optional[Dict] = None) -> List[Dict]:
-        params = {"user_id": user_id, "limit": limit}
-        # 搜索时默认搜全局，利用所有相关记忆辅助回答
-        return self._get_client(llm_settings).search(query, **params)
+    def search_memories(self, query: str, user_id: str, run_id: Optional[str] = None, limit: int = 5, llm_settings: Optional[Dict] = None, rerank: bool = True) -> List[Dict]:
+        """
+        搜索记忆
+        
+        Args:
+            query: 搜索查询
+            user_id: 用户 ID
+            run_id: 对话 ID（可选）
+            limit: 返回数量限制
+            llm_settings: LLM 配置
+            rerank: 是否启用 reranker 重排序（默认 True）
+        
+        Returns:
+            搜索结果列表，如果启用 reranker，结果会按相关性重新排序
+        """
+        params = {"user_id": user_id, "limit": limit, "rerank": rerank}
+        logger.info(f"🔍 搜索记忆: query='{query}', user_id={user_id}, rerank={rerank}")
+        
+        results = self._get_client(llm_settings).search(query, **params)
+        
+        # 检查 reranker 是否生效（结果中是否有 rerank_score）
+        # if results and isinstance(results, list) and len(results) > 0:
+        #     first_result = results[0]
+        #     if isinstance(first_result, dict) and 'rerank_score' in first_result:
+        #         logger.info(f"✅ Reranker 生效! 返回 {len(results)} 条结果，首条 rerank_score={first_result.get('rerank_score'):.4f}")
+        #     else:
+        #         logger.info(f"📋 搜索完成，返回 {len(results)} 条结果 (无 rerank_score，可能 reranker 未配置或未启用)")
+        # else:
+        #     logger.info(f"📋 搜索完成，返回 0 条结果")
+        
+        return results
 
     def get_memories(self, user_id: str, run_id: Optional[str] = None, limit: int = 100, llm_settings: Optional[Dict] = None) -> Dict[str, Any]:
         """
