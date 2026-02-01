@@ -1,3 +1,5 @@
+// src/pages/MemoryPage.tsx
+
 import { useState, useEffect, useCallback } from 'react';
 import { memoryAPI, conversationAPI } from '../api';
 import { handleError, debounce } from '../utils';
@@ -28,7 +30,7 @@ interface Conversation {
 
 export default function MemoryPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<number>(0); // 0 = Global/All User Memories
+  const [selectedConversationId, setSelectedConversationId] = useState<number>(0);
 
   const [memories, setMemories] = useState<Memory[]>([]);
   const [relations, setRelations] = useState<Relation[]>([]);
@@ -53,12 +55,9 @@ export default function MemoryPage() {
     debounce(async (searchValue: string, convId: number) => {
       try {
         setLoading(true);
-        // If convId is 0, backend handles as global/user level if run_id is omitted or specifically handled
-        // Our updated API sends 'conversation_id' only if not null/undefined. 
-        // If we send 0, let's treat it as "Global" (run_id = None).
-        
+        // 如果 convId 为 0，后端处理为全局/用户级别（run_id = None）
         const data = await memoryAPI.getMemories(convId, 1, 50, undefined, searchValue || undefined);
-        setMemories(data.memories);
+        setMemories(data.memories || []);
         setRelations(data.relations || []);
       } catch (err) {
         handleError(err, '加载记忆失败');
@@ -72,6 +71,9 @@ export default function MemoryPage() {
   useEffect(() => {
     debouncedLoadMemories(search, selectedConversationId);
   }, [search, selectedConversationId, debouncedLoadMemories]);
+
+  // [关键判断] 只有当向量记忆和图谱关系都为空时，才算真正没有数据
+  const isEmpty = memories.length === 0 && relations.length === 0;
 
   return (
     <div className="memory-page-container">
@@ -122,35 +124,45 @@ export default function MemoryPage() {
           </div>
         ) : (
           <div className="memory-display">
-            {memories.length === 0 ? (
+            {/* [修复] 使用联合判断 isEmpty */}
+            {isEmpty ? (
               <div className="empty-state">
                 <div className="empty-icon">📭</div>
                 <p>暂无相关记忆</p>
               </div>
             ) : (
               <>
+                {/* 1. 记忆列表部分 */}
                 <div className="memory-section">
                   <h3>📝 记忆列表 ({memories.length})</h3>
-                  <div className="memory-cards">
-                    {memories.map((memory) => (
-                      <div key={memory.id} className="memory-card-read">
-                        <div className="card-header">
-                          <span className="memory-id">#{typeof memory.id === 'string' ? memory.id.slice(0, 8) : memory.id}</span>
-                          <span className="memory-date">
-                            {new Date(memory.created_at).toLocaleDateString()}
-                          </span>
+                  {memories.length > 0 ? (
+                    <div className="memory-cards">
+                      {memories.map((memory) => (
+                        <div key={memory.id} className="memory-card-read">
+                          <div className="card-header">
+                            <span className="memory-id">#{typeof memory.id === 'string' ? memory.id.slice(0, 8) : memory.id}</span>
+                            <span className="memory-date">
+                              {new Date(memory.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="card-content">
+                            <HighlightText text={memory.content} highlight={search} />
+                          </div>
+                          <div className="card-tags">
+                            {memory.category && <span className="tag category">{memory.category}</span>}
+                          </div>
                         </div>
-                        <div className="card-content">
-                          <HighlightText text={memory.content} highlight={search} />
-                        </div>
-                        <div className="card-tags">
-                          {memory.category && <span className="tag category">{memory.category}</span>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    // [新增] 当有图谱但无列表时的提示
+                    <div style={{ padding: '20px', color: '#888', fontStyle: 'italic', background: '#f9f9f9', borderRadius: '8px', textAlign: 'center' }}>
+                      暂无文本记忆，但保留了以下关联图谱数据。
+                    </div>
+                  )}
                 </div>
 
+                {/* 2. 图谱部分 */}
                 {relations.length > 0 && (
                   <div className="memory-section">
                     <h3>🔗 关联图谱数据 ({relations.length})</h3>
