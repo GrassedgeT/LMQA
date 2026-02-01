@@ -22,7 +22,7 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 class AgentService:
-    """智能体服务 - Graph RAG (Vector + Graph) + 强一致性删除架构"""
+    """智能体服务 - Graph RAG (Vector + Graph) + 全域同步一致性删除"""
     
     def __init__(self):
         self.memory_manager = None
@@ -156,7 +156,7 @@ class AgentService:
 """
 
     # =========================================================================
-    # 3. 工具执行 (修复中和逻辑)
+    # 3. 工具执行 (全域同步修复版)
     # =========================================================================
     def _execute_tool(self, tool_name: str, tool_args: Dict, user_id: int, conversation_id: int, llm_settings: Dict) -> str:
         logger.info(f"🔧 Agent 执行工具: {tool_name} | 参数: {tool_args}")
@@ -189,17 +189,24 @@ class AgentService:
             if tool_name == "delete_memory":
                 query_content = tool_args["content"]
                 
-                # A. 搜索
+                # A. 搜索 (包含局部和全局，且不丢弃图谱)
                 candidates = []
+                # 搜局部
                 local_raw = self.memory_manager.search_memories(query=query_content, user_id=str(user_id), run_id=str(conversation_id), scope='local', limit=10, llm_settings=llm_settings)
-                vecs_local, _ = parse_search_result(local_raw)
+                vecs_local, rels_local = parse_search_result(local_raw) # [修复1] 之前是 _，现在捕获 relations
                 for v in vecs_local: 
                     if 'id' in v: candidates.append({"id": v['id'], "content": v['content'], "scope": "局部"})
+                # 把图谱关系也加进去，让 LLM 知道虽然向量没了但图还在
+                for r in rels_local:
+                    candidates.append({"id": "graph_only", "content": f"[局部图谱残留] {r}", "scope": "局部"})
 
+                # 搜全局
                 global_raw = self.memory_manager.search_memories(query=query_content, user_id=str(user_id), run_id=None, scope='global', limit=10, llm_settings=llm_settings)
-                vecs_global, _ = parse_search_result(global_raw)
+                vecs_global, rels_global = parse_search_result(global_raw)
                 for v in vecs_global: 
                     if 'id' in v: candidates.append({"id": v['id'], "content": v['content'], "scope": "全局"})
+                for r in rels_global:
+                    candidates.append({"id": "graph_only", "content": f"[全局图谱残留] {r}", "scope": "全局"})
 
                 if not candidates: return f"未找到与 '{query_content}' 相关的记忆。"
 
@@ -211,7 +218,8 @@ class AgentService:
                 {json.dumps(candidates, ensure_ascii=False, indent=2)}
                 
                 请判断哪些条目必须删除？（仅删除事实匹配的）。
-                返回ID列表 JSON，如 ["id1"]，不删返回 []。
+                返回ID列表 JSON，如 ["id1"]。
+                注意：如果是 [图谱残留] 条目，不需要返回ID（因为它没法直接删），但这意味着我们需要执行重置操作。
                 """
                 try:
                     review_res = reviewer_client.chat.completions.create(
@@ -222,32 +230,29 @@ class AgentService:
                     ids_to_delete = json.loads(review_content)
                 except: ids_to_delete = []
 
-                if not ids_to_delete: return "经核实，未找到需要删除的具体事实记忆。"
-
-                # C. 物理删除
+                # C. 物理删除 (删除 Vector)
                 deleted_contents = []
                 for mem_id in ids_to_delete:
+                    if mem_id == "graph_only": continue # 跳过虚拟ID
                     target = next((c for c in candidates if c['id'] == mem_id), None)
                     if target:
                         self.memory_manager.delete_memory(mem_id, llm_settings=llm_settings)
                         deleted_contents.append(target['content'])
 
-                # D. 图谱重置 (关键修复: 强制主语为 User)
-                if deleted_contents:
+                # D. 图谱重置 (全域同步修复)
+                # 只要删除了东西，或者 LLM 实际上是想删但只能通过重置来解决图谱残留
+                if deleted_contents or (candidates and not ids_to_delete):
                     neutralize_prompt = f"""
-                    你是一个知识图谱修复专家。用户刚刚删除了以下记忆：
-                    {json.dumps(deleted_contents, ensure_ascii=False)}
+                    你是一个知识图谱修复专家。用户刚刚删除了关于 "{query_content}" 的信息。
                     
                     为了切断图谱中的旧连接，你需要生成一条“重置声明”。
                     
                     【绝对规则】
                     1. **主语必须是“用户”**：严禁在声明中再次提及被删除的具体名字或实体！
-                    2. **仅重置被删属性**：只重置被删除的那一项属性，不要波及其他。
+                    2. **仅重置被删属性**：只重置被删除的那一项属性。
                     
-                    【示例】
-                    - 删除了“我叫张三” -> 输出：“用户的名字未知” (✅ 正确)
-                    - 删除了“我叫张三” -> 输出：“张三的名字未知” (❌ 错误！禁止提张三)
-                    - 删除了“我住在北京” -> 输出：“用户的居住地未知” (✅ 正确)
+                    示例：删除了“我叫张三” -> 输出：“用户的名字未知”
+                    示例：删除了“我住在北京” -> 输出：“用户的居住地未知”
                     
                     请生成这句重置声明，不要任何其他废话。
                     """
@@ -257,7 +262,7 @@ class AgentService:
                         )
                         neutral_statement = neutralize_res.choices[0].message.content.strip()
                         
-                        # 执行重置
+                        # [关键修复 2] 1. 重置全局 (Global)
                         self.memory_manager.add_memory(
                             content=neutral_statement,
                             user_id=str(user_id),
@@ -266,13 +271,26 @@ class AgentService:
                             metadata={"type": "graph_reset", "source": "delete_tool"},
                             llm_settings=llm_settings
                         )
-                        logger.info(f"🔄 图谱重置执行: {neutral_statement}")
+                        logger.info(f"🔄 图谱重置执行 (Global): {neutral_statement}")
+
+                        # [关键修复 2] 2. 重置局部 (Local) - 这样局部图谱的旧连接也会被 Unknown 覆盖
+                        if conversation_id:
+                            self.memory_manager.add_memory(
+                                content=neutral_statement,
+                                user_id=str(user_id),
+                                run_id=str(conversation_id),
+                                scope='local',
+                                metadata={"type": "graph_reset", "source": "delete_tool"},
+                                llm_settings=llm_settings
+                            )
+                            logger.info(f"🔄 图谱重置执行 (Local): {neutral_statement}")
+
                     except Exception as e:
                         logger.error(f"图谱重置失败: {e}")
 
                 return f"已删除 {len(deleted_contents)} 条记忆，并同步更新了知识图谱状态。"
 
-            # --- 存/取逻辑 (包含 Graph RAG 解析) ---
+            # --- 存/取逻辑 ---
             scope = 'local' if 'local' in tool_name else 'global'
             run_id = str(conversation_id) if scope == 'local' else None
             metadata = {"source_conversation_id": str(conversation_id)} if scope == 'global' else None
