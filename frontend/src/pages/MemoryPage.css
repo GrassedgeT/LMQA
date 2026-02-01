@@ -27,19 +27,23 @@
 }
 
 .sidebar-divider {
-  padding: 8px 24px;
+  padding: 10px 24px;
   font-size: 12px;
   font-weight: 600;
   color: #94a3b8;
-  margin-top: 20px;
+  margin-top: 16px;
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  border-left: 3px solid transparent; /* Align with sidebar items */
+  display: flex;
+  align-items: center;
 }
 
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .sidebar-item {
@@ -52,6 +56,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   border-left: 3px solid transparent;
+  line-height: 1.5;
 }
 
 .sidebar-item:hover {
