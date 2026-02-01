@@ -109,14 +109,14 @@ class MemoryManager:
         results = self._get_client(llm_settings).search(query, **params)
         
         # 检查 reranker 是否生效（结果中是否有 rerank_score）
-        if results and isinstance(results, list) and len(results) > 0:
-            first_result = results[0]
-            if isinstance(first_result, dict) and 'rerank_score' in first_result:
-                logger.info(f"✅ Reranker 生效! 返回 {len(results)} 条结果，首条 rerank_score={first_result.get('rerank_score'):.4f}")
-            else:
-                logger.info(f"📋 搜索完成，返回 {len(results)} 条结果 (无 rerank_score，可能 reranker 未配置或未启用)")
-        else:
-            logger.info(f"📋 搜索完成，返回 0 条结果")
+        # if results and isinstance(results, list) and len(results) > 0:
+        #     first_result = results[0]
+        #     if isinstance(first_result, dict) and 'rerank_score' in first_result:
+        #         logger.info(f"✅ Reranker 生效! 返回 {len(results)} 条结果，首条 rerank_score={first_result.get('rerank_score'):.4f}")
+        #     else:
+        #         logger.info(f"📋 搜索完成，返回 {len(results)} 条结果 (无 rerank_score，可能 reranker 未配置或未启用)")
+        # else:
+        #     logger.info(f"📋 搜索完成，返回 0 条结果")
         
         return results
 
