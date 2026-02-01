@@ -3,6 +3,7 @@
 import json
 import hashlib
 import time
+import os  # [必须导入]
 from mem0 import Memory
 from .config import get_mem0_config
 from typing import List, Dict, Any, Optional
@@ -21,7 +22,6 @@ class MemoryManager:
 
     def _get_config_hash(self, llm_settings: Dict) -> str:
         if not llm_settings: return "default"
-        # 确保字典排序后 hash 一致
         return hashlib.md5(json.dumps(llm_settings, sort_keys=True).encode()).hexdigest()
 
     def _get_client(self, llm_settings: Optional[Dict] = None):
@@ -30,14 +30,38 @@ class MemoryManager:
             return self._clients[config_hash]
 
         logger.info(f"⚡ 初始化 Mem0 客户端 (Hash: {config_hash})")
+        
+        # =========================================================
+        # [核心修复] 强制设置环境变量 (Monkey Patch)
+        # 解决 Mem0 Graph/Reranker 组件忽略配置回退到 OpenAI 官方接口的问题
+        # =========================================================
+        if llm_settings:
+            base_url = llm_settings.get("base_url")
+            api_key = llm_settings.get("api_key")
+            model_name = str(llm_settings.get("model_name", "")).lower()
+            
+            # 1. 智能补全 DeepSeek URL (防止前端没传)
+            if not base_url and "deepseek" in model_name:
+                base_url = "https://api.deepseek.com"
+                # 同时回写到 settings，保证 config.py 也能拿到
+                llm_settings["base_url"] = base_url
+            
+            # 2. 强制注入环境变量 (核弹级修复)
+            if base_url:
+                os.environ["OPENAI_BASE_URL"] = base_url
+                logger.info(f"🔧 [Environment] 强制设置 OPENAI_BASE_URL={base_url}")
+            
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+        # =========================================================
+
         config = get_mem0_config(llm_settings)
         
-        # 记录 reranker 配置状态
+        # 记录配置状态
         if 'reranker' in config:
-            reranker_provider = config['reranker'].get('provider', 'unknown')
-            logger.info(f"✅ Reranker 已配置: provider={reranker_provider}")
+            logger.info(f"✅ Reranker: {config['reranker'].get('provider')}")
         else:
-            logger.info(f"ℹ️ Reranker 未配置")
+            logger.info(f"ℹ️ Reranker: Disabled")
         
         client = Memory.from_config(config)
         self._clients[config_hash] = client
@@ -50,97 +74,66 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"❌ 预热失败: {e}")
 
-    def add_memory(self, content: str, user_id: str, run_id: Optional[str] = None, metadata: Optional[Dict] = None, llm_settings: Optional[Dict] = None) -> Dict:
-        """
-        添加记忆：
-        1. 强制 run_id=None (存为全局，保证图谱 Entity 唯一性)
-        2. 将 conversation_id 存入 metadata
-        3. 遇到 Qdrant 404 自动重试
-        """
+    # --- 隔离逻辑 (保持不变) ---
+    def _resolve_ids(self, user_id: str, run_id: Optional[str], scope: str) -> tuple:
+        if scope == 'local':
+            if not run_id:
+                raise ValueError("Local memory requires a valid run_id")
+            return f"{user_id}_conv_{run_id}", None
+        return user_id, None
+
+    # --- 核心操作 (保持不变，确保引用了最新的 _get_client) ---
+    def add_memory(self, content: str, user_id: str, run_id: Optional[str] = None, scope: str = 'global', metadata: Optional[Dict] = None, llm_settings: Optional[Dict] = None) -> Dict:
         client = self._get_client(llm_settings)
-        
-        params = {"user_id": user_id}
-        
-        # 将 run_id 转移到 metadata
+        target_user_id, target_run_id = self._resolve_ids(user_id, run_id, scope)
+        params = {"user_id": target_user_id}
+        if target_run_id: params["run_id"] = target_run_id
+
         final_metadata = metadata or {}
-        if run_id:
-            final_metadata["source_conversation_id"] = str(run_id)
-        if final_metadata:
-            params["metadata"] = final_metadata
+        final_metadata["real_user_id"] = user_id
+        if run_id: final_metadata["source_conversation_id"] = str(run_id)
+        final_metadata["scope"] = scope
+        params["metadata"] = final_metadata
 
-        # 包装消息，确保 Mem0 正确提取图谱
         messages = [{"role": "user", "content": content}]
-
         try:
-            # 关键：这里不传 run_id 参数给 Mem0
             return client.add(messages, **params)
         except Exception as e:
-            # 404 自动修复逻辑 (针对 Qdrant Collection 不存在的情况)
-            error_str = str(e)
-            if "404" in error_str or "Not found" in error_str:
-                logger.warning(f"⚠️ 集合丢失，尝试重建客户端并重试: {e}")
-                # 清除缓存
+            if "404" in str(e) or "Not found" in str(e):
+                logger.warning(f"⚠️ 集合丢失重试: {e}")
                 config_hash = self._get_config_hash(llm_settings)
-                if config_hash in self._clients:
-                    del self._clients[config_hash]
-                # 重新获取 client 并重试
+                if config_hash in self._clients: del self._clients[config_hash]
                 client = self._get_client(llm_settings)
                 return client.add(messages, **params)
             raise e
 
-    def search_memories(self, query: str, user_id: str, run_id: Optional[str] = None, limit: int = 5, llm_settings: Optional[Dict] = None, rerank: bool = True) -> List[Dict]:
-        """
-        搜索记忆
-        
-        Args:
-            query: 搜索查询
-            user_id: 用户 ID
-            run_id: 对话 ID（可选）
-            limit: 返回数量限制
-            llm_settings: LLM 配置
-            rerank: 是否启用 reranker 重排序（默认 True）
-        
-        Returns:
-            搜索结果列表，如果启用 reranker，结果会按相关性重新排序
-        """
-        params = {"user_id": user_id, "limit": limit, "rerank": rerank}
-        logger.info(f"🔍 搜索记忆: query='{query}', user_id={user_id}, rerank={rerank}")
-        
-        results = self._get_client(llm_settings).search(query, **params)
-        
-        # 检查 reranker 是否生效（结果中是否有 rerank_score）
-        # if results and isinstance(results, list) and len(results) > 0:
-        #     first_result = results[0]
-        #     if isinstance(first_result, dict) and 'rerank_score' in first_result:
-        #         logger.info(f"✅ Reranker 生效! 返回 {len(results)} 条结果，首条 rerank_score={first_result.get('rerank_score'):.4f}")
-        #     else:
-        #         logger.info(f"📋 搜索完成，返回 {len(results)} 条结果 (无 rerank_score，可能 reranker 未配置或未启用)")
-        # else:
-        #     logger.info(f"📋 搜索完成，返回 0 条结果")
-        
-        return results
-
-    def get_memories(self, user_id: str, run_id: Optional[str] = None, limit: int = 100, llm_settings: Optional[Dict] = None) -> Dict[str, Any]:
-        """
-        [关键修复] 获取记忆列表
-        1. 获取 run_id=None 的全局记忆
-        2. 过滤 results (Python 过滤)
-        3. 透传 relations (图数据) <--- 本次新增
-        """
+    def search_memories(self, query: str, user_id: str, run_id: Optional[str] = None, scope: str = 'global', limit: int = 5, llm_settings: Optional[Dict] = None) -> List[Dict]:
         client = self._get_client(llm_settings)
+        target_user_id, target_run_id = self._resolve_ids(user_id, run_id, scope)
+        params = {"user_id": target_user_id, "limit": limit}
+        if target_run_id: params["run_id"] = target_run_id
         
         try:
-            # 1. 拉取所有数据
-            all_memories = client.get_all(user_id=user_id, limit=limit)
+            return client.search(query, **params)
+        except Exception as e:
+            logger.error(f"Mem0 Search Error: {e}")
+            return []
+
+    def get_memories(self, user_id: str, run_id: Optional[str] = None, limit: int = 100, llm_settings: Optional[Dict] = None) -> Dict[str, Any]:
+        client = self._get_client(llm_settings)
+        if run_id and str(run_id) != "0":
+            target_user_id = f"{user_id}_conv_{run_id}"
+        else:
+            target_user_id = user_id
+            
+        try:
+            all_memories = client.get_all(user_id=target_user_id, limit=limit)
         except Exception as e:
             logger.error(f"Mem0 get_all 异常: {e}")
             return {"results": [], "relations": []}
 
-        if all_memories is None:
-            return {"results": [], "relations": []}
+        if all_memories is None: return {"results": [], "relations": []}
 
-        # 2. 解析结构
-        # Mem0 v1.x 典型结构: {'results': [...], 'relations': [...]}
         if isinstance(all_memories, dict):
             results = all_memories.get("results", []) or []
             relations = all_memories.get("relations", []) or []
@@ -148,32 +141,11 @@ class MemoryManager:
             results = all_memories
             relations = []
         else:
-            results = []
-            relations = []
-
-        # 3. 过滤 Results (向量记忆)
-        target_run_id = str(run_id) if run_id is not None else None
+            results, relations = [], []
         
-        # 如果查看全部，直接返回
-        if not target_run_id or target_run_id == "0":
-            return {"results": results, "relations": relations}
+        return {"results": results, "relations": relations}
 
-        # 如果查看特定对话，过滤 results
-        filtered_results = []
-        for mem in results:
-            if not isinstance(mem, dict): continue
-            meta = mem.get("metadata", {}) or {}
-            source_id = str(meta.get("source_conversation_id", ""))
-            
-            if source_id == target_run_id:
-                filtered_results.append(mem)
-        
-        # 注意：对于 relations (图数据)，Mem0 通常返回的是全局关系。
-        # 即使是查看特定对话，展示相关的图谱关系也是有益的，所以我们不对 relations 进行强过滤
-        # (除非我们在 metadata 里也存了 source_id 给 relations，但 Mem0 v1.x 可能不支持给边加 metadata)
-        
-        return {"results": filtered_results, "relations": relations}
-
+    # ... update/delete ...
     def update_memory(self, memory_id: str, new_data: str, llm_settings: Optional[Dict] = None) -> Dict:
         return self._get_client(llm_settings).update(memory_id, new_data)
 
@@ -182,20 +154,8 @@ class MemoryManager:
 
     def delete_all_memories(self, user_id: str, run_id: Optional[str] = None, llm_settings: Optional[Dict] = None) -> Dict:
         client = self._get_client(llm_settings)
-        
-        # 如果是删全库
-        if not run_id:
+        if run_id:
+            target_user_id = f"{user_id}_conv_{run_id}"
+            return client.delete_all(user_id=target_user_id)
+        else:
             return client.delete_all(user_id=user_id)
-        
-        # 如果是删特定对话的记忆，先查 ID 再删
-        # 复用我们修好的 get_memories 来找 ID
-        memories_resp = self.get_memories(user_id, run_id, limit=1000, llm_settings=llm_settings)
-        memories = memories_resp.get("results", [])
-        
-        count = 0
-        for mem in memories:
-            if "id" in mem:
-                client.delete(mem["id"])
-                count += 1
-        
-        return {"message": f"Deleted {count} memories for run_id {run_id}"}
