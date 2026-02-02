@@ -1,140 +1,133 @@
-# 如果使用AI写代码，注意不要让AI随便破坏别人写的文件
-# 所有依赖不要让AI安装，必须根据依赖的文档自己手动管理
-# commit message注意遵守[commit convince](https://www.conventionalcommits.org/en/v1.0.0/)
-# 所有API KEY不能硬编码到代码中，一律使用.env文件获取，不push到remote
+# LMQA - AI Chat with Long-term Memory
 
-# git注意事项
-开发自己功能前一定要从主分支上创建一个自己的新分支，自己的提交push到自己的分支上，想合并到主分支请通过发起pr
-在 Push 之前，必须拉取远端最新代码，以避免覆盖他人代码。推荐使用 rebase 保持提交线整洁
+LMQA 是一个集成了长期记忆功能的 AI 聊天应用演示项目。它结合了 React 前端和 Flask 后端，利用 Mem0 记忆层、Qdrant 向量数据库和 Neo4j 图数据库，实现了一个能够“记住”用户交互和上下文的智能对话系统。
+
+
+## 🛠️ 技术栈
+
+### Backend (后端)
+*   **Core**: Python 3.12+, Flask
+*   **Memory Layer**: Mem0 (集成 Graph & Vector Memory)
+*   **Database**:
+    *   **Vector DB**: Qdrant (用于语义搜索)
+    *   **Graph DB**: Neo4j (用于关系图谱)
+    *   **Relational DB**: SQLite (用于存储用户、对话历史和系统配置)
+*   **Package Manager**: uv (高性能 Python 包管理器)
+
+### Frontend (前端)
+*   **Core**: React 19, TypeScript
+*   **Build Tool**: Vite
+*   **Routing**: React Router
+*   **Styling**: CSS Modules
+
+---
+
+## 🚀 快速开始
+
+### 1. 前置要求
+*   **Docker & Docker Compose** (用于运行数据库)
+*   **Node.js & npm** (用于前端)
+*   **Python 3.12+** (建议安装 `uv` 包管理器)
+
+### 2. 启动数据库服务
+请确保 Docker Desktop 或 Docker Engine 正在运行，然后在项目根目录 (`LMQA/`) 或 `backend/` 目录下运行：
+
+```bash
+docker-compose up -d
 ```
-# 获取远端更新（不合并）
-git fetch origin
+*   **Qdrant**: 端口 6333 (GRPC) / 6334 (HTTP)
+*   **Neo4j**: 端口 7474 (HTTP) / 7687 (Bolt)
+*   **注意**: 首次启动可能需要几分钟拉取镜像。
 
-# 将你的修改“变基”到最新的 origin/main 之上
-# 如果有冲突，解决冲突后 git add <file> 然后 git rebase --continue
-git rebase origin/main
+### 3. 后端设置 (Backend)
 
-# 推送到远端
-git push -u origin feature/my-new-feature
-
-# 想要合并到主分支请在GitHub 网页端发起 Pull Request (PR)
+进入后端目录：
+```bash
+cd backend
 ```
-# LMQA - React + Flask 前后端交互演示
 
-这是一个最小的React + Flask前后端交互演示项目，展示了如何构建一个完整的Web应用程序。
+**安装依赖:**
+```bash
+uv sync
+```
 
-## 项目结构
+**配置环境变量:**
+复制示例文件并重命名为 `.env`：
+```bash
+cp .env-example .env
+```
+编辑 `.env` 文件，填入必要的配置：
+*   **数据库配置**: Qdrant 和 Neo4j 的地址/账号密码 (默认为 Docker Compose 预设值)。
+*   **LLM API Key**: 填入你的 LLM 提供商 Key (如 `GOOGLE_API_KEY`, `OPENAI_API_KEY` 等)。
+*   **Secret Key**: 设置 `SECRET_KEY`。
+
+**运行服务器:**
+```bash
+uv run main.py
+```
+后端服务将在 `http://localhost:5000` 启动。
+
+### 4. 前端设置 (Frontend)
+
+进入前端目录：
+```bash
+cd frontend
+```
+
+**安装依赖:**
+```bash
+npm install
+```
+
+**运行开发服务器:**
+```bash
+npm run dev
+```
+前端服务将在 `http://localhost:3000` (或 5173，视 Vite 配置而定) 启动。
+
+---
+
+## 📂 项目结构
 
 ```
 .
-├── backend/          # Flask后端
-│   ├── main.py       # 主应用程序文件
-│   ├── pyproject.toml # 依赖管理
-│   └── README.md     # 后端说明
-└── frontend/         # React前端
-    ├── src/          # 源代码
-    ├── package.json  # 依赖管理
-    └── README.md     # 前端说明
+├── backend/                  # Flask 后端应用
+│   ├── app/
+│   │   ├── api/              # API 路由 (Auth, Chat, Memories)
+│   │   ├── core/             # 核心配置与工具
+│   │   └── services/         # 业务逻辑服务
+│   ├── memory/               # Mem0 记忆模块集成
+│   ├── docker-compose.yml    # 数据库容器配置
+│   ├── main.py               # 程序入口
+│   └── pyproject.toml        # Python 依赖配置
+├── frontend/                 # React 前端应用
+│   ├── src/
+│   │   ├── components/       # UI 组件
+│   │   ├── contexts/         # React Context (Theme等)
+│   │   ├── pages/            # 页面 (Chat, Login, Memory等)
+│   │   └── api.ts            # API 调用封装
+│   └── vite.config.ts        # Vite 配置
+└── evaluation/               # 模型评估脚本
 ```
 
-## 功能特性
+## ⚠️ 开发注意事项 
 
-- 前后端分离架构
-- RESTful API设计
-- 跨域请求处理
-- 待办事项管理（CRUD操作）
-- 错误处理和加载状态
+**如果你使用 AI 辅助写代码，请严格遵守以下规则：**
 
-## 运行说明
+1.  **文件完整性**：不要让 AI 随意破坏他人编写的文件结构。
+2.  **依赖管理**：**禁止 AI 自动运行安装命令**。所有依赖必须根据文档手动管理。
+    *   Python: 使用 `uv add <package>`
+    *   Frontend: 使用 `npm install <package>`
+3.  **Commit 规范**：Commit message 必须遵守 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)。
+4.  **安全**：**严禁将 API KEY 硬编码到代码中**。必须使用 `.env` 文件获取，且 `.env` 禁止提交到远程仓库。
+5.  **简易Git 流程**：
+    *   开发新功能前，从 `main` 分支切出自己的新分支。
+    *   Push 前必须先拉取远端最新代码并使用 `rebase`：
+        ```bash
+        git fetch origin
+        git rebase origin/main
+        git push -u origin feature/your-feature-name
+        ```
+    *   合并代码必须通过 GitHub Pull Request (PR) 进行。
 
-### 必要依赖（自己下载）
-uv包管理器（管理python），npm(前端)
-
-### 后端 (Flask)
-
-1. 进入后端目录：
-   ```
-   cd backend
-   ```
-
-2. 安装依赖：
-   ```
-   uv sync
-   ```
-
-3. 激活虚拟环境
-
-   windows使用.venv/bin下的activate.ps1或activate.bat, linux下根据自己的shell类型选择相应的activate脚本
-   ```
-   source .venv/bin/activate
-   ```
-
-3. 启用docker(确保docker应用已经打开)
-   ```
-   docker-compose up -d
-   ```
-4. 运行开发服务器：
-   ```
-   uv run main.py
-   ```
-5. 注意：
-* 所有python相关的依赖使用 'uv add xxx' 进行安装，不要使用 'pip install' ,如果 uv add 不好使，再考虑使用 'uv pip install xxx'
-* 运行python脚本使用 'uv run xxx.py' , 不要使用'python xxx.py'
-   后端服务器将在 http://localhost:5000 上运行
-
-### 前端 (React + Vite)
-
-1. 进入前端目录：
-   ```
-   cd frontend
-   ```
-
-2. 安装依赖：
-   ```
-   npm install
-   ```
-
-3. 运行开发服务器：
-   ```
-   npm run dev
-   ```
-其他前端依赖根据依赖的官方文档使用npm进行管理
-   服务器将在 http://localhost:3000 上运行
-
-### 同时运行前后端
-
-推荐使用两个终端分别运行前后端服务：
-
-终端1（后端）：
-```bash
-cd backend
-uv run main.py
-```
-
-终端2（前端）：
-```bash
-cd frontend
-npm run dev
-```
-
-访问 http://localhost:3000 查看应用程序。
-
-## API端点
-
-后端提供以下API端点：
-
-- `GET /api/todos` - 获取所有待办事项
-- `POST /api/todos` - 创建新的待办事项
-- `PUT /api/todos/<id>` - 更新待办事项
-- `DELETE /api/todos/<id>` - 删除待办事项
-
-## 开发范式
-
-这个项目展示了以下开发范式：
-
-1. **前后端分离**：前端和后端完全独立，通过API进行通信
-2. **RESTful设计**：遵循REST原则设计API端点
-3. **跨域处理**：使用CORS处理开发环境中的跨域请求
-4. **错误处理**：前后端都包含适当的错误处理机制
-5. **状态管理**：React使用useState进行本地状态管理
-6. **代理配置**：Vite配置代理以简化开发环境中的API调用
+---
